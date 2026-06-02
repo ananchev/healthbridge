@@ -1,0 +1,46 @@
+services:
+  backend:
+    build:
+      context: ../backend
+      dockerfile: ../deploy/backend.Dockerfile
+    container_name: healthbridge-backend
+    environment:
+      HEALTHBRIDGE_DB: /data/health.duckdb
+      HEALTHBRIDGE_TOKEN: ${HEALTHBRIDGE_TOKEN}        # phone bearer token
+      APP_ENV: ${APP_ENV:-prod}                        # banner on /stats when != prod
+    volumes:
+      - health-data:/data            # RW: backend is the sole writer
+    ports:
+      # Publish on the Docker host's LAN so the separate NPM box can reach it.
+      # Bind to a specific host IP if you don't want it on all interfaces:
+      #   "${HOST_LAN_IP}:8000:8000"
+      - "${BACKEND_PORT:-8000}:8000"
+    restart: unless-stopped
+
+  sleep-mcp:
+    build:
+      context: ../mcp
+      dockerfile: ../deploy/mcp.Dockerfile
+    container_name: healthbridge-sleep-mcp
+    environment:
+      HEALTHBRIDGE_DB: /data/health.duckdb
+      HEALTHBRIDGE_TOKEN: ${HEALTHBRIDGE_TOKEN}        # if the MCP route is token-gated too
+    volumes:
+      - health-data:/data:ro         # RO: MCP never writes
+    ports:
+      - "${MCP_PORT:-8001}:8001"
+    restart: unless-stopped
+    depends_on:
+      - backend
+
+volumes:
+  health-data:
+
+# Networking model: NPM runs on a SEPARATE box on the LAN (with a port-forward on
+# the router for public access). These containers publish their ports on the Docker
+# host's LAN IP; NPM's proxy hosts forward to http://<docker-host-LAN-IP>:8000 and
+# :8001. No shared Docker network. See deploy/NPM.md.
+#
+# If the Docker host has a firewall (ufw/nftables), allow the NPM box to reach
+# 8000/8001. Consider binding the published ports to the LAN IP only (see above)
+# so they're not exposed on unintended interfaces.

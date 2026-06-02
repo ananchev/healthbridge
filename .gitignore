@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.venv-dev/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# DuckDB local dev files
+*.duckdb
+*.duckdb.wal
+dev.duckdb*
+
+# Env / secrets
+.env
+*.env
+!.env.example
+
+# Apple Health exports (can be large / personal)
+export.zip
+*export*.xml
+
+# macOS / Xcode
+.DS_Store
+ios/**/xcuserdata/
+ios/**/*.xcuserstate
+ios/**/DerivedData/
+*.xcworkspace/xcuserdata/
+
+# Editor
+.vscode/
+.idea/
