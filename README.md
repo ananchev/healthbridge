@@ -58,6 +58,22 @@ cp .env.dev.example .env.dev    # fill in NPM details + proxy IDs
 
 See `scripts/dev/README.md`.
 
+## iOS app (HealthBridge)
+
+All Swift source is in `ios/HealthBridge/`. It targets `https://healthbridge.example.com`
+exclusively — the NPM-flip tooling routes that hostname to the laptop during dev.
+
+Quick start:
+1. Follow `ios/XCODE_SETUP.md` — create project, add capabilities, Info.plist entries.
+2. Run on device. On first launch iOS prompts for HealthKit read permission.
+3. In the app: paste the bearer token, tap **Pick source…**, select your Apple Watch.
+4. Flip NPM to the laptop (`./scripts/dev/npm-flip.sh laptop 192.168.2.5`), start uvicorn.
+5. Tap **Sync now** — watch uvicorn log for the POST; rows appear in `dev.duckdb`.
+
+Key gotcha: the Apple Watch source name contains a **non-breaking space** (U+00A0).
+The source picker reads it verbatim from HealthKit, so the user just picks from a list
+rather than typing — this is intentional.
+
 ## Deploy
 
 ```bash

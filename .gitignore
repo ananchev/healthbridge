@@ -16,7 +16,12 @@ dev.duckdb*
 # Env / secrets
 .env
 *.env
+.env.*
 !.env.example
+!.env.dev.example
+
+# Claude Code internal memory
+memory/
 
 # Apple Health exports (can be large / personal)
 export.zip

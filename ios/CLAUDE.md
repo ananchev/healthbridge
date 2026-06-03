@@ -59,15 +59,17 @@ dev and prod — the only thing that changes is NPM's upstream (flipped to the l
 in dev, a Docker host in prod). So the app is configured once and never needs to
 know whether it's hitting dev or prod. See deploy/NETWORKING.md.
 
-## File layout (create these)
+## File layout (all implemented)
 
-- `HealthBridgeApp.swift`   — @main app entry.
-- `ContentView.swift`       — single-screen UI (status, endpoint, token, buttons).
-- `HealthKitManager.swift`  — auth, queries, stage mapping, source listing.
-- `SyncEngine.swift`        — cursors, payload building, POST, error handling.
-- `BackgroundSync.swift`    — BGTaskScheduler + HKObserverQuery wiring.
-- `Keychain.swift`          — minimal Keychain wrapper for the bearer token.
-- `Settings.swift`          — UserDefaults-backed config (endpoint, source, cursors).
+- `HealthBridgeApp.swift`   — @main entry; `AppModel` owns HealthKitManager + SyncEngine.
+- `ContentView.swift`       — status, endpoint/token fields, source picker sheet, sync button.
+- `HealthKitManager.swift`  — auth, `querySleep/HRV/RHR(since:)`, stage mapping, `sourcesWritingSleep()`.
+- `SyncEngine.swift`        — cursors, payload build, POST to `/ingest`, cursor advancement on 2xx.
+- `BackgroundSync.swift`    — `BGTaskScheduler` + `HKObserverQuery`; enabled via toggle in UI.
+- `Keychain.swift`          — `SecItemAdd/Update/Delete` wrapper keyed to `cc.tonio.healthbridge`.
+- `Settings.swift`          — UserDefaults for endpoint, source, cursors; Keychain for bearer token.
 
-Implement manual sync first (ContentView button → SyncEngine.syncNow()). Get the
-end-to-end path green before wiring BackgroundSync.
+Manual sync path is complete. BackgroundSync is wired but gated behind the
+"Background sync" toggle — enable only after manual sync is verified end-to-end.
+
+See `ios/XCODE_SETUP.md` for project creation, capabilities, and Info.plist steps.
