@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 from contextlib import asynccontextmanager
+from datetime import date
 
 from fastapi import FastAPI, Header
 
@@ -46,26 +47,60 @@ def ingest(
     payload: IngestPayload,
     authorization: str | None = Header(default=None),
 ) -> IngestResult:
-    """Validate bearer, dedupe-write, recompute affected nights.
+    """Validate bearer, dedupe-write, recompute affected nights."""
+    auth.verify_bearer(authorization)
+    conn = db.connect(DB_PATH)
+    try:
+        sleep_written = db.insert_sleep(conn, payload.data.sleep)
+        hrv_written = db.insert_hrv(conn, payload.data.hrv)
+        rhr_written = db.insert_rhr(conn, payload.data.rhr)
 
-    TODO(claude-code):
-      1. auth.verify_bearer(authorization)
-      2. conn = db.connect(DB_PATH)  (RW)
-      3. counts = insert_sleep/hrv/rhr
-      4. nights = affected nights from sleep + hrv/rhr dates
-      5. recomputed = db.recompute_nights(conn, nights)
-      6. return IngestResult(counts, recomputed, latest timestamps)
-    Tests: idempotency (insert twice -> 0 new), auth branches, summary correctness.
-    """
-    raise NotImplementedError
+        nights: set[date] = set()
+        nights.update(db.affected_nights_from_sleep(payload.data.sleep))
+        nights.update(db.assign_to_night(h.timestamp) for h in payload.data.hrv)
+        nights.update(r.date for r in payload.data.rhr)
+
+        recomputed = db.recompute_nights(conn, nights) if nights else []
+
+        latest_sleep = conn.execute("SELECT MAX(start_ts) FROM sleep_samples").fetchone()[0]
+        latest_hrv = conn.execute("SELECT MAX(ts) FROM hrv_samples").fetchone()[0]
+        latest_rhr = conn.execute("SELECT MAX(date) FROM rhr_samples").fetchone()[0]
+
+        return IngestResult(
+            sleep_written=sleep_written,
+            hrv_written=hrv_written,
+            rhr_written=rhr_written,
+            nights_recomputed=recomputed,
+            latest_sleep_ts=latest_sleep,
+            latest_hrv_ts=latest_hrv,
+            latest_rhr_date=latest_rhr,
+        )
+    finally:
+        conn.close()
 
 
 @app.get("/stats")
 def stats(authorization: str | None = Header(default=None)) -> dict:
-    """Per-type counts, latest timestamps, freshness. Includes app_env for banner.
-
-    TODO(claude-code): auth.verify_bearer(authorization); SELECT counts + max
-    timestamps per raw table + latest nightly_summary.night_date. Include
-    {"app_env": APP_ENV} so a UI can render the non-prod banner.
-    """
-    raise NotImplementedError
+    """Per-type counts, latest timestamps, freshness. Includes app_env for banner."""
+    auth.verify_bearer(authorization)
+    conn = db.connect(DB_PATH)
+    try:
+        sleep_count = conn.execute("SELECT COUNT(*) FROM sleep_samples").fetchone()[0]
+        hrv_count = conn.execute("SELECT COUNT(*) FROM hrv_samples").fetchone()[0]
+        rhr_count = conn.execute("SELECT COUNT(*) FROM rhr_samples").fetchone()[0]
+        latest_sleep = conn.execute("SELECT MAX(start_ts) FROM sleep_samples").fetchone()[0]
+        latest_hrv = conn.execute("SELECT MAX(ts) FROM hrv_samples").fetchone()[0]
+        latest_rhr = conn.execute("SELECT MAX(date) FROM rhr_samples").fetchone()[0]
+        latest_night = conn.execute("SELECT MAX(night_date) FROM nightly_summary").fetchone()[0]
+        return {
+            "sleep_count": sleep_count,
+            "hrv_count": hrv_count,
+            "rhr_count": rhr_count,
+            "latest_sleep_ts": latest_sleep,
+            "latest_hrv_ts": latest_hrv,
+            "latest_rhr_date": str(latest_rhr) if latest_rhr else None,
+            "latest_night_date": str(latest_night) if latest_night else None,
+            "app_env": APP_ENV,
+        }
+    finally:
+        conn.close()

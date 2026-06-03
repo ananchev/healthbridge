@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 # Known sleep stage values (prefix HKCategoryValueSleepAnalysis already stripped
 # by the iOS app before sending).
@@ -33,7 +33,18 @@ class SleepSample(BaseModel):
     source: str
     source_version: str | None = None
 
-    # TODO(claude-code): validator — end >= start; stage in SLEEP_STAGES.
+    @field_validator("stage")
+    @classmethod
+    def stage_must_be_known(cls, v: str) -> str:
+        if v not in SLEEP_STAGES:
+            raise ValueError(f"Unknown sleep stage: {v!r}")
+        return v
+
+    @model_validator(mode="after")
+    def end_after_start(self) -> SleepSample:
+        if self.end < self.start:
+            raise ValueError("end must be >= start")
+        return self
 
 
 class HrvSample(BaseModel):

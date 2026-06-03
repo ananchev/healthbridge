@@ -55,51 +55,154 @@ def assign_to_night(start_ts: datetime) -> date:
 # --- Idempotent inserts ----------------------------------------------------
 # All use INSERT ... ON CONFLICT DO NOTHING. Return number of NEW rows written.
 
-def insert_sleep(conn: duckdb.DuckDBPyConnection, samples: list[SleepSample]) -> int:
-    """Insert sleep samples idempotently. Return count of new rows.
 
-    TODO(claude-code): executemany with ON CONFLICT DO NOTHING against
-    sleep_samples PK (start_ts, end_ts, stage, source). Count rows actually
-    inserted (compare counts before/after, or use RETURNING if supported).
-    """
-    raise NotImplementedError
+def insert_sleep(conn: duckdb.DuckDBPyConnection, samples: list[SleepSample]) -> int:
+    """Insert sleep samples idempotently. Return count of new rows."""
+    if not samples:
+        return 0
+    before = conn.execute("SELECT COUNT(*) FROM sleep_samples").fetchone()[0]
+    conn.executemany(
+        """INSERT INTO sleep_samples (start_ts, end_ts, stage, source, source_version)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT DO NOTHING""",
+        [(s.start, s.end, s.stage, s.source, s.source_version) for s in samples],
+    )
+    after = conn.execute("SELECT COUNT(*) FROM sleep_samples").fetchone()[0]
+    return after - before
 
 
 def insert_hrv(conn: duckdb.DuckDBPyConnection, samples: list[HrvSample]) -> int:
     """Insert HRV samples idempotently. PK (ts, source)."""
-    raise NotImplementedError
+    if not samples:
+        return 0
+    before = conn.execute("SELECT COUNT(*) FROM hrv_samples").fetchone()[0]
+    conn.executemany(
+        """INSERT INTO hrv_samples (ts, value_ms, source)
+           VALUES (?, ?, ?)
+           ON CONFLICT DO NOTHING""",
+        [(s.timestamp, s.value_ms, s.source) for s in samples],
+    )
+    after = conn.execute("SELECT COUNT(*) FROM hrv_samples").fetchone()[0]
+    return after - before
 
 
 def insert_rhr(conn: duckdb.DuckDBPyConnection, samples: list[RhrSample]) -> int:
     """Insert resting-HR samples idempotently. PK (date, source)."""
-    raise NotImplementedError
+    if not samples:
+        return 0
+    before = conn.execute("SELECT COUNT(*) FROM rhr_samples").fetchone()[0]
+    conn.executemany(
+        """INSERT INTO rhr_samples (date, value_bpm, source)
+           VALUES (?, ?, ?)
+           ON CONFLICT DO NOTHING""",
+        [(s.date, s.value_bpm, s.source) for s in samples],
+    )
+    after = conn.execute("SELECT COUNT(*) FROM rhr_samples").fetchone()[0]
+    return after - before
 
 
 # --- Nightly summary recompute --------------------------------------------
+
 
 def affected_nights_from_sleep(samples: list[SleepSample]) -> set[date]:
     """Return the set of nights touched by a batch of sleep samples."""
     return {assign_to_night(s.start) for s in samples}
 
 
+def night_window_utc(night_date: date) -> tuple[datetime, datetime]:
+    """Return (start_utc, end_utc) = [noon(night_date-1) AMS, noon(night_date) AMS) in UTC."""
+    from datetime import timedelta
+
+    d_prev = night_date - timedelta(days=1)
+    start_local = datetime(d_prev.year, d_prev.month, d_prev.day, 12, 0, 0, tzinfo=LOCAL_TZ)
+    end_local = datetime(
+        night_date.year, night_date.month, night_date.day, 12, 0, 0, tzinfo=LOCAL_TZ
+    )
+    utc = ZoneInfo("UTC")
+    return start_local.astimezone(utc), end_local.astimezone(utc)
+
+
 def recompute_nights(conn: duckdb.DuckDBPyConnection, nights: set[date]) -> list[date]:
     """Recompute nightly_summary rows for the given nights.
 
-    For each night: drop the existing row, recompute from raw tables, insert.
-    Pure SQL preferred. Pull:
-      - bed_time = min(start_ts), wake_time = max(end_ts) over the night's sleep
-        samples (Apple Watch source). Night boundary via assign_to_night logic —
-        implement as a SQL expression or compute per-night in Python then write.
-      - per-stage seconds via SUM(epoch(end_ts) - epoch(start_ts)) grouped by stage
-      - asleep_seconds = sum of ASLEEP_STAGES
-      - efficiency_pct = asleep / time_in_bed * 100
-      - hrv_avg_ms = avg(value_ms) of hrv_samples assigned to that night
-      - rhr_bpm = rhr_samples.value_bpm for that night_date (if present)
-
-    Return the list of nights actually recomputed.
-
-    TODO(claude-code): implement. Watch the noon-to-noon boundary carefully — the
-    simplest correct approach is to compute the [noon prev day, noon this day)
-    UTC-adjusted window per night and aggregate within it.
+    For each night: delete existing row, aggregate from raw tables, reinsert.
+    Returns list of nights actually computed (skips nights with no sleep data).
     """
-    raise NotImplementedError
+    recomputed: list[date] = []
+    for night_date in sorted(nights):
+        start_utc, end_utc = night_window_utc(night_date)
+
+        sleep_row = conn.execute(
+            """
+            SELECT
+                MIN(start_ts),
+                MAX(end_ts),
+                CAST(epoch(MAX(end_ts)) - epoch(MIN(start_ts)) AS INTEGER),
+                CAST(COALESCE(SUM(CASE
+                    WHEN stage IN ('AsleepCore','AsleepDeep','AsleepREM','AsleepUnspecified')
+                    THEN epoch(end_ts) - epoch(start_ts) ELSE 0 END), 0) AS INTEGER),
+                CAST(COALESCE(SUM(CASE WHEN stage = 'AsleepREM'
+                    THEN epoch(end_ts) - epoch(start_ts) ELSE 0 END), 0) AS INTEGER),
+                CAST(COALESCE(SUM(CASE WHEN stage = 'AsleepDeep'
+                    THEN epoch(end_ts) - epoch(start_ts) ELSE 0 END), 0) AS INTEGER),
+                CAST(COALESCE(SUM(CASE WHEN stage = 'AsleepCore'
+                    THEN epoch(end_ts) - epoch(start_ts) ELSE 0 END), 0) AS INTEGER),
+                CAST(COALESCE(SUM(CASE WHEN stage = 'Awake'
+                    THEN epoch(end_ts) - epoch(start_ts) ELSE 0 END), 0) AS INTEGER)
+            FROM sleep_samples
+            WHERE start_ts >= ? AND start_ts < ?
+            """,
+            [start_utc, end_utc],
+        ).fetchone()
+
+        bed_time = sleep_row[0]
+        if bed_time is None:
+            continue
+
+        wake_time = sleep_row[1]
+        time_in_bed = sleep_row[2]
+        asleep = sleep_row[3]
+        rem = sleep_row[4]
+        deep = sleep_row[5]
+        core = sleep_row[6]
+        awake = sleep_row[7]
+
+        efficiency = (asleep / time_in_bed * 100) if time_in_bed and time_in_bed > 0 else None
+
+        hrv_row = conn.execute(
+            "SELECT AVG(value_ms) FROM hrv_samples WHERE ts >= ? AND ts < ?",
+            [start_utc, end_utc],
+        ).fetchone()
+        hrv_avg = hrv_row[0] if hrv_row and hrv_row[0] is not None else None
+
+        rhr_row = conn.execute(
+            "SELECT value_bpm FROM rhr_samples WHERE date = ? LIMIT 1",
+            [night_date],
+        ).fetchone()
+        rhr = rhr_row[0] if rhr_row else None
+
+        conn.execute("DELETE FROM nightly_summary WHERE night_date = ?", [night_date])
+        conn.execute(
+            """INSERT INTO nightly_summary (
+                night_date, bed_time, wake_time, time_in_bed_seconds,
+                asleep_seconds, rem_seconds, deep_seconds, core_seconds, awake_seconds,
+                efficiency_pct, hrv_avg_ms, rhr_bpm
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            [
+                night_date,
+                bed_time,
+                wake_time,
+                time_in_bed,
+                asleep,
+                rem,
+                deep,
+                core,
+                awake,
+                efficiency,
+                hrv_avg,
+                rhr,
+            ],
+        )
+        recomputed.append(night_date)
+
+    return recomputed

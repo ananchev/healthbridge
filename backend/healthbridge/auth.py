@@ -28,8 +28,16 @@ def verify_bearer(authorization: str | None) -> None:
     - Missing/!startswith 'Bearer ': 401.
     - Token mismatch (constant-time): 403.
     - EXPECTED_TOKEN empty in non-dev: refuse to run (misconfiguration) -> 500.
-
-    TODO(claude-code): implement exactly this contract; add a unit test for each
-    branch (dev bypass, missing header, wrong token, correct token, unconfigured).
     """
-    raise NotImplementedError
+    if DEV_MODE:
+        return
+
+    if not EXPECTED_TOKEN:
+        raise HTTPException(status_code=500, detail="HEALTHBRIDGE_TOKEN is not configured")
+
+    if authorization is None or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or malformed Authorization header")
+
+    token = authorization[len("Bearer ") :]
+    if not hmac.compare_digest(token, EXPECTED_TOKEN):
+        raise HTTPException(status_code=403, detail="Invalid token")

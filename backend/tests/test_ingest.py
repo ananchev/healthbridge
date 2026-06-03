@@ -3,8 +3,8 @@
 The MOST IMPORTANT test (per CLAUDE.md): ingest is idempotent. Sending the same
 batch twice must NOT create duplicate rows.
 
-NOTE for Claude Code: implement these against an in-memory or temp-file DuckDB.
-Add more: night-boundary correctness, efficiency math, HRV averaging.
+Night-boundary and efficiency-math tests live in test_night_logic.py and
+test_summary.py respectively.
 """
 
 from __future__ import annotations
@@ -28,26 +28,15 @@ def conn():
 
 
 def test_ingest_is_idempotent(conn):
-    """Inserting the same sleep batch twice yields no duplicates.
-
-    TODO(claude-code): build a small list[SleepSample], insert_sleep twice,
-    assert the second call returns 0 new rows and the table row count is stable.
-    """
-    pytest.skip("implement once db.insert_sleep is written")
-
-
-def test_night_assignment_noon_boundary():
-    """A 23:30 start belongs to the next morning's night; 06:00 to that date.
-
-    TODO(claude-code): assert db.assign_to_night behaviour around the noon split,
-    including a sample exactly at 12:00 (-> next day).
-    """
-    pytest.skip("implement")
-
-
-def test_efficiency_math(conn):
-    """efficiency_pct = asleep / time_in_bed * 100, within tolerance.
-
-    TODO(claude-code): insert a synthetic night, recompute, assert the row.
-    """
-    pytest.skip("implement")
+    """Inserting the same sleep batch twice yields no duplicates."""
+    samples = [
+        SleepSample(
+            start="2026-05-20T20:00:00Z",
+            end="2026-05-21T04:00:00Z",
+            stage="InBed",
+            source="Apple Watch test",
+        )
+    ]
+    assert db.insert_sleep(conn, samples) == 1
+    assert db.insert_sleep(conn, samples) == 0
+    assert conn.execute("SELECT COUNT(*) FROM sleep_samples").fetchone()[0] == 1
