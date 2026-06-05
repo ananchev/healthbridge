@@ -6,8 +6,6 @@ POSTs JSON to a REST endpoint. The backend exposes `POST /ingest/hae`, which
 normalizes HAE's format to the canonical `IngestData` and reuses the same write
 path as `/ingest` (see `backend/healthbridge/hae_adapter.py`).
 
-The custom SwiftUI app under `ios/` is kept as a **fallback** path, not the primary.
-
 ## Tier
 
 - **Basic** (one-time purchase): manual "Quick Export" — enough for dev/testing.

@@ -14,14 +14,15 @@ workouts, power, steps, weight, blood oxygen. v1 is sleep-domain only.
 
 ```
 ┌─────────────────────┐   HTTPS    ┌──────────────────────────┐   reads   ┌──────────────────────────┐
-│  iOS Helper App     │ CF→NPM→LAN │  Ingestion Service       │ ◀──────── │  Sleep MCP Server        │
-│  (HealthBridge)     │ ─────────▶ │  (NPM → FastAPI)         │ read-only │  (FastMCP)               │
+│  Health Auto Export │ CF→NPM→LAN │  Ingestion Service       │ ◀──────── │  Sleep MCP Server        │
+│  (iOS app)          │ ─────────▶ │  (NPM → FastAPI)         │ read-only │  (FastMCP)               │
 │                     │  bearer tok │                          │           │                          │
-│  • HKObserverQuery  │            │  • Validate (Pydantic)   │           │  • get_latest_night      │
-│  • Sync cursors     │            │  • Dedupe (ON CONFLICT)  │           │  • get_nightly_range     │
-│  • Manual+sched+obs │            │  • Write DuckDB          │           │  • get_recovery_status   │
-└─────────────────────┘            │  • Recompute summaries   │           │  • get_hrv_trend         │
-                                   └──────────────────────────┘           └──────────────────────────┘
+│  • Sleep/HRV/RHR    │            │  • Validate (Pydantic)   │           │  • get_latest_night      │
+│  • REST API export  │            │  • Dedupe (ON CONFLICT)  │           │  • get_nightly_range     │
+│  • Manual + sched   │            │  • Normalize (HAE→canon) │           │  • get_recovery_status   │
+└─────────────────────┘            │  • Write DuckDB          │           │  • get_hrv_trend         │
+                                   │  • Recompute summaries   │           └──────────────────────────┘
+                                   └──────────────────────────┘
                                                 │                                       ▲
                                                 ▼                                       │
                                          ┌──────────────┐                               │
@@ -41,36 +42,27 @@ writer. All other consumers open it read-only.
 
 ## 3. Components
 
-### 3.1 iOS Helper App ("HealthBridge")
+### 3.1 Ingestion Client (Health Auto Export)
 
-**Stack:** SwiftUI + HealthKit, no third-party dependencies.
+The client is the third-party **Health Auto Export (HAE)** iOS app
+(https://github.com/Lybron/health-auto-export). It reads HealthKit and POSTs JSON to
+a REST endpoint — no custom app to build/sign. See `docs/HAE_SETUP.md` for the exact
+configuration.
 
-**HealthKit read permissions:**
-- `HKCategoryTypeIdentifierSleepAnalysis`
-- `HKQuantityTypeIdentifierHeartRateVariabilitySDNN`
-- `HKQuantityTypeIdentifierRestingHeartRate`
+**HealthKit metrics:** Sleep, Heart Rate Variability (SDNN), Resting Heart Rate.
 
-**UI (single screen):**
-- Endpoint URL (e.g. `https://healthbridge.example.com/ingest`)
-- Bearer token (stored in Keychain), sent as Authorization: Bearer <token>
-- Per-type status: last sync time, sample count, last error
-- "Sync now" button
-- "Auto-sync on new samples" toggle (enables observers)
+**Export config:** summarize OFF (per-stage sleep segments), time grouping minutes,
+destination REST API → `https://healthbridge.example.com/ingest/hae`, header
+`Authorization: Bearer <HEALTHBRIDGE_TOKEN>`. Manual export in dev; scheduled
+(HAE Premium) in prod.
 
-**Sync cursors:** per data type, persist the max `startDate` successfully sent.
-Next sync queries only samples newer than the cursor. Advance only on HTTP 2xx.
+**Trigger modes:** manual (Quick Export) and scheduled background export.
 
-**Three trigger modes (coexist):**
-1. Manual — "Sync now" button.
-2. Scheduled — Background App Refresh, ~daily.
-3. Observer — `HKObserverQuery` + `enableBackgroundDelivery` per type.
-
-**Source filtering:** sleep samples filtered to the Apple Watch source. The source
-name contains a non-breaking space (U+00A0). Make it configurable in the app
-(default to the known value, allow override).
-
-**Build/deploy:** Xcode, free Apple Dev account, weekly cert refresh via reinstall.
-Bundle ID `cc.tonio.healthbridge`.
+**Normalization & source filtering** happen server-side in
+`backend/healthbridge/hae_adapter.py` (HAE exports both Apple Watch and SleepWatch):
+filter to the configured Apple Watch source (`HEALTHBRIDGE_SLEEP_SOURCE`,
+NBSP-insensitive), map short stage names to canonical, convert sleep/HRV to UTC, key
+RHR by local date. Idempotent re-export is safe.
 
 ### 3.2 Ingestion Service
 
@@ -203,8 +195,8 @@ the apps; it forwards over the LAN by IP:port (multiple Docker hosts).
 - `health.duckdb` on a named volume, mounted RW in backend, RO in sleep-mcp.
 - NPM proxies `healthbridge.example.com → <docker-host-LAN-IP>:8000` and
   `mcp-sleep.example.com → <docker-host-LAN-IP>:8001`.
-- The iOS app always targets the stable public hostname; only NPM's upstream IP
-  differs between dev (laptop) and prod (Docker host).
+- The ingestion client (HAE) always targets the stable public hostname; only NPM's
+  upstream IP differs between dev (laptop) and prod (Docker host).
 - Auth: backend bearer token (phone). Optional NPM Access List on `/stats`.
 - See `deploy/NPM.md`.
 
@@ -212,7 +204,7 @@ the apps; it forwards over the LAN by IP:port (multiple Docker hosts).
 
 `scripts/dev/start-dev-stack.sh` runs the real backend + MCP on the laptop and
 flips the NPM upstreams to point at it (via `npm-flip.sh`, NPM API), so the public
-hostnames and the iOS app's real endpoint hit local code. Full-state rollback,
+hostnames and the client's real endpoint hit local code. Full-state rollback,
 auto-revert on exit, host-side watchdog fallback, and an `APP_ENV` banner mark the
 flipped session. Mirrors the cycling-coach dev pattern. See `scripts/dev/README.md`.
 
@@ -220,5 +212,5 @@ flipped session. Mirrors the cycling-coach dev pattern. See `scripts/dev/README.
 
 - Travel-aware time zones (assume Europe/Amsterdam).
 - Any training data (Wahoo pipeline owns it).
-- Real-time push beyond what HKObserverQuery throttling allows.
+- Real-time push (ingestion is manual/scheduled export, not streaming).
 - A web dashboard (the MCP + existing tooling cover consumption for now).

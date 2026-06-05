@@ -17,8 +17,8 @@ later, but v1 captures exactly three: sleep analysis, HRV (SDNN), and resting HR
 ## Architecture (three loosely-coupled components, one canonical DB)
 
 ```
-iOS Helper App  ──HTTPS──▶  Ingestion Service  ──writes──▶  health.duckdb
-(HealthBridge)   CF→NPM→LAN   (FastAPI)                          │
+Health Auto Export ─HTTPS─▶  Ingestion Service  ──writes──▶  health.duckdb
+(iOS app)        CF→NPM→LAN   (FastAPI)                          │
                                                                  │ read-only
                               Sleep MCP Server  ◀────reads───────┤
                               (FastMCP)                          │
@@ -34,7 +34,6 @@ writer. Everything else reads it read-only.
 - `backend/`     — FastAPI ingestion service + DuckDB writes. The only writer.
 - `mcp/`         — `sleep-mcp` read-only MCP server (FastMCP). Exposes sleep tools.
 - `bootstrap/`   — one-shot importer that seeds history from an Apple Health export.zip.
-- `ios/`         — SwiftUI helper app (HealthBridge) that reads HealthKit and POSTs.
 - `deploy/`      — Dockerfiles, docker-compose (publishes host ports), NPM setup guide.
 - `scripts/dev/` — local-dev launcher + NPM-flip tooling (run real services on the
   laptop, flip NPM upstreams to it, auto-revert). Mirrors the cycling-coach pattern.
@@ -100,12 +99,12 @@ writer. Everything else reads it read-only.
 3. **scripts/dev/** — NPM-flip local-dev/e2e tooling. This is the PRIMARY dev path:
    run backend+MCP in a dedicated venv on the laptop, flip NPM's upstream to the
    laptop's LAN IP, and exercise the full CF→NPM→laptop path (real bearer auth,
-   real public hostname, real iOS app). Auto-reverts on exit.
+   real public hostname, real client). Auto-reverts on exit.
 4. **deploy/** — only after laptop e2e is green: compose publishes host ports on a
    Docker host; flip NPM's upstream to that host's LAN IP. Same flip, different LAN IP.
-4. **ios/** — start with manual-button sync only; validate end-to-end; then add
-   scheduled (Background App Refresh) and observer (HKObserverQuery) triggers.
-5. **mcp/** — start with `get_latest_night` + `get_nightly_range`; expand to recovery
+5. **Health Auto Export** — configure the HAE app to POST to `/ingest/hae`
+   (see `docs/HAE_SETUP.md`); validate end-to-end through the flipped dev path.
+6. **mcp/** — start with `get_latest_night` + `get_nightly_range`; expand to recovery
    signals.
 
 ## Conventions
@@ -124,7 +123,8 @@ writer. Everything else reads it read-only.
 
 - `curl` POST of a sample payload to the local backend writes rows and is idempotent.
 - `bootstrap` ingests a real export.zip and populates nightly_summary for all nights.
-- The iOS app, manual mode, successfully syncs last 7 days with a bearer token.
+- Health Auto Export POSTs to `/ingest/hae` with a bearer token; rows appear and
+  nightly summaries recompute (re-send is idempotent).
 - `sleep-mcp` returns a correct `get_latest_night()` and `get_nightly_range()`.
 - Laptop e2e green via CF→NPM→laptop (real bearer auth). Prod is the same path
   with NPM's upstream flipped to a Docker host's LAN IP. `/ingest` requires the token.

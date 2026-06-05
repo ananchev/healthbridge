@@ -29,12 +29,8 @@ export.zip
 # Health Auto Export dumps (personal health data — never commit)
 HealthAutoExport-*.json
 
-# macOS / Xcode
+# macOS
 .DS_Store
-ios/**/xcuserdata/
-ios/**/*.xcuserstate
-ios/**/DerivedData/
-*.xcworkspace/xcuserdata/
 
 # Editor
 .vscode/

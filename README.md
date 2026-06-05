@@ -13,7 +13,6 @@ intentionally excluded here.
 backend/     FastAPI ingestion service + DuckDB writes (the ONLY writer)
 mcp/         sleep-mcp — read-only MCP server (FastMCP)
 bootstrap/   one-shot importer: seed history from an Apple Health export.zip
-ios/         SwiftUI helper app (HealthBridge) — reads HealthKit, POSTs to backend
 deploy/      Dockerfiles, docker-compose (NPM network), NPM setup guide
 scripts/dev/ Local-dev launcher + NPM-flip tooling (run locally, flip NPM)
 docs/        SPEC.md (full specification)
@@ -24,7 +23,7 @@ CLAUDE.md    guidance for Claude Code — READ THIS FIRST
 
 1. Read `CLAUDE.md` (root) and `docs/SPEC.md`.
 2. Follow the build order in `CLAUDE.md` / `docs/BUILD_ORDER.md`:
-   backend → bootstrap → deploy → ios → mcp.
+   backend → bootstrap → scripts/dev → deploy → HAE client → mcp.
 
 ## Quick local dev (backend)
 
@@ -58,29 +57,20 @@ cp .env.dev.example .env.dev    # fill in NPM details + proxy IDs
 
 See `scripts/dev/README.md`.
 
-## Ingestion clients
-
-Both target the stable `https://healthbridge.example.com` — the NPM-flip tooling routes
-that hostname to the laptop during dev.
-
-### Primary: Health Auto Export (HAE)
+## Ingestion client — Health Auto Export (HAE)
 
 The [Health Auto Export](https://github.com/Lybron/health-auto-export) iOS app reads
-HealthKit and POSTs to `POST /ingest/hae`. The backend adapter
-(`backend/healthbridge/hae_adapter.py`) normalizes its format (filters to the Apple
-Watch source, maps stages, converts to UTC) and reuses the `/ingest` write path.
+HealthKit and POSTs to `POST /ingest/hae` (target the stable
+`https://healthbridge.example.com` — the NPM-flip tooling routes it to the laptop in
+dev). The backend adapter (`backend/healthbridge/hae_adapter.py`) normalizes HAE's
+format (filters to the Apple Watch source, maps stages, converts to UTC) and reuses
+the `/ingest` write path.
 
 Configure per **`docs/HAE_SETUP.md`**: enable only Sleep + HRV + Resting Heart Rate,
 summarize OFF, time grouping minutes, header `Authorization,Bearer <token>`. Set
 `HEALTHBRIDGE_SLEEP_SOURCE` on the backend so SleepWatch is filtered out (HAE exports
 both Apple Watch and SleepWatch). NBSP in the source name is handled — a normal space
 in the config matches.
-
-### Fallback: custom SwiftUI app
-
-`ios/HealthBridge/` is a minimal SwiftUI app that POSTs to `/ingest`. Kept as a
-fallback (e.g. if HAE Premium isn't available). See `ios/XCODE_SETUP.md`; needs a
-paid Apple Developer account for on-device install (MDM blocks free provisioning).
 
 ## Deploy
 

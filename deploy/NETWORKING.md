@@ -29,8 +29,9 @@ upstream IP does. Cloudflare is untouched by a flip.
 - `healthbridge.example.com` → NPM → `<LAN-IP>:8000`  (ingest API; the phone posts here)
 - `mcp-sleep.example.com`    → NPM → `<LAN-IP>:8001`  (sleep MCP; coach/Claude reach here)
 
-The iOS app always targets `https://healthbridge.example.com` — identical in dev and
-prod. In dev, NPM is flipped to the laptop, so that hostname reaches local uvicorn.
+The ingestion client (Health Auto Export) always targets
+`https://healthbridge.example.com` — identical in dev and prod. In dev, NPM is
+flipped to the laptop, so that hostname reaches local uvicorn.
 
 ## Auth
 

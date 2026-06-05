@@ -4,7 +4,8 @@ Same approach as cycling-coach, and it's the PRIMARY dev/e2e path — not a prod
 tool. Run the real backend + MCP on your laptop (dedicated venv, uvicorn, no
 Docker), and flip the NPM upstreams to your laptop's LAN IP. The full public path
 — Cloudflare (DNS proxy) → router :443 → NPM → laptop — then hits local code, so
-the iOS app talks to the same `https://healthbridge.example.com` it will use in prod.
+the ingestion client (Health Auto Export) talks to the same
+`https://healthbridge.example.com` it will use in prod.
 Real bearer-token auth is exercised (do NOT set HEALTHBRIDGE_DEV on this path).
 NPM auto-reverts when you exit. See `deploy/NETWORKING.md` for the topology.
 

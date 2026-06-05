@@ -50,9 +50,9 @@ this for every change. "It compiles" is not "it works." No phase in
 - `pytest` for Python (backend, bootstrap, mcp). Fixtures use temp-dir DuckDB.
 - `httpx` + FastAPI `TestClient` for endpoint tests.
 - `ruff` for lint + format. Config in each `pyproject.toml`.
-- iOS: add `XCTest` targets for the stage-mapping function and payload JSON
-  encoding (pure logic, testable without a device). Document that UI/HealthKit
-  integration is validated manually on-device (can't run in CI without a Mac+sim).
+- HAE ingestion: the adapter is tested server-side in `backend/tests/test_hae_adapter.py`
+  (source filter, stage mapping, UTC conversion, RHR local-date, endpoint idempotency
+  + auth) against a synthetic fixture mirroring a real export.
 
 ## Definition of done (per function / endpoint / tool)
 

@@ -12,8 +12,8 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-# Known sleep stage values (prefix HKCategoryValueSleepAnalysis already stripped
-# by the iOS app before sending).
+# Known sleep stage values (prefix HKCategoryValueSleepAnalysis already stripped;
+# the HAE adapter maps short stage names to these — see hae_adapter.py).
 SLEEP_STAGES = {
     "AsleepCore",
     "AsleepDeep",
