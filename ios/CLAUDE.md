@@ -1,5 +1,11 @@
 # iOS Helper App — Build Guide (HealthBridge)
 
+> **Status: FALLBACK path.** The primary ingestion client is now Health Auto Export
+> (HAE) via `POST /ingest/hae` — see `docs/HAE_SETUP.md`. This custom app POSTs to
+> `/ingest` and is kept as a backup (e.g. if HAE Premium isn't available). It needs
+> a paid Apple Developer account for on-device install (MDM blocks free provisioning;
+> simulator works for UI only).
+
 ## Reality check for Claude Code
 
 You can WRITE all the Swift source, Info.plist entries, and entitlements, and lay

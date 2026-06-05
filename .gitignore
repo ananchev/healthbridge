@@ -26,6 +26,8 @@ memory/
 # Apple Health exports (can be large / personal)
 export.zip
 *export*.xml
+# Health Auto Export dumps (personal health data — never commit)
+HealthAutoExport-*.json
 
 # macOS / Xcode
 .DS_Store

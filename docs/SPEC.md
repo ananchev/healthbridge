@@ -145,6 +145,34 @@ affected nights on each ingest (drop+reinsert that night's row, pure SQL).
 `stage` arrives WITHOUT the `HKCategoryValueSleepAnalysis` prefix (the app strips
 it). Backend stores it as-is.
 
+### 5b. Health Auto Export variant — `POST /ingest/hae`
+
+The PRIMARY ingestion path is the Health Auto Export (HAE) iOS app, which POSTs a
+different shape. `/ingest/hae` accepts it and normalizes to the same `IngestData`,
+reusing the `/ingest` write path. See `docs/HAE_SETUP.md` and
+`backend/healthbridge/hae_adapter.py`.
+
+HAE body (relevant subset; timestamps are local wall-clock with offset):
+
+```json
+{"data": {"metrics": [
+  {"name": "sleep_analysis", "units": "hr", "data": [
+    {"start": "2026-05-29 01:09:08 +0200", "end": "2026-05-29 01:11:08 +0200",
+     "value": "Core", "source": "Apple Watch van Owner"}]},
+  {"name": "heart_rate_variability", "units": "ms", "data": [
+    {"date": "2026-05-29 00:08:57 +0200", "qty": 31.5,
+     "source": "Apple Watch van Owner"}]},
+  {"name": "resting_heart_rate", "units": "count/min", "data": [
+    {"date": "2026-05-29 00:00:38 +0200", "qty": 57,
+     "source": "Apple Watch van Owner"}]}
+]}}
+```
+
+Adapter rules: filter to the configured Apple Watch source (drops SleepWatch;
+NBSP-insensitive); map short stages (Core/Deep/REM/Asleep/Awake →
+AsleepCore/AsleepDeep/AsleepREM/AsleepUnspecified/Awake); convert sleep/HRV to UTC;
+key RHR by LOCAL date (its timestamp is local midnight). Unknown metrics ignored.
+
 ## 6. "Night" definition
 
 A sample with local start time < 12:00 belongs to that date's night; >= 12:00

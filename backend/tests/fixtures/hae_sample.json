@@ -1,0 +1,40 @@
+{
+  "data": {
+    "metrics": [
+      {
+        "name": "sleep_analysis",
+        "units": "hr",
+        "data": [
+          {"source": "SleepWatch", "value": "Asleep", "start": "2026-05-29 00:50:00 +0200", "end": "2026-05-29 06:55:00 +0200", "date": "2026-05-29 00:50:00 +0200"},
+          {"source": "Apple Watch van Owner", "value": "Core", "start": "2026-05-29 01:09:08 +0200", "end": "2026-05-29 01:11:08 +0200", "date": "2026-05-29 01:09:08 +0200"},
+          {"source": "Apple Watch van Owner", "value": "Awake", "start": "2026-05-29 01:11:08 +0200", "end": "2026-05-29 01:19:09 +0200", "date": "2026-05-29 01:11:08 +0200"},
+          {"source": "Apple Watch van Owner", "value": "Deep", "start": "2026-05-29 01:38:09 +0200", "end": "2026-05-29 02:06:41 +0200", "date": "2026-05-29 01:38:09 +0200"},
+          {"source": "Apple Watch van Owner", "value": "REM", "start": "2026-05-29 05:00:00 +0200", "end": "2026-05-29 05:30:00 +0200", "date": "2026-05-29 05:00:00 +0200"},
+          {"source": "Apple Watch van Owner", "value": "Asleep", "start": "2026-05-29 06:00:00 +0200", "end": "2026-05-29 06:10:00 +0200", "date": "2026-05-29 06:00:00 +0200"}
+        ]
+      },
+      {
+        "name": "heart_rate_variability",
+        "units": "ms",
+        "data": [
+          {"source": "Apple Watch van Owner", "qty": 31.5, "date": "2026-05-29 00:08:57 +0200", "start": "2026-05-29 00:08:57 +0200", "end": "2026-05-29 00:09:56 +0200"},
+          {"source": "Apple Watch van Owner", "qty": 40.0, "date": "2026-05-29 03:00:00 +0200", "start": "2026-05-29 03:00:00 +0200", "end": "2026-05-29 03:01:00 +0200"}
+        ]
+      },
+      {
+        "name": "resting_heart_rate",
+        "units": "count/min",
+        "data": [
+          {"source": "Apple Watch van Owner", "qty": 57, "date": "2026-05-29 00:00:38 +0200", "start": "2026-05-29 00:00:38 +0200", "end": "2026-05-29 23:56:11 +0200"}
+        ]
+      },
+      {
+        "name": "steps",
+        "units": "count",
+        "data": [
+          {"source": "Owner’s iPhone", "qty": 8421, "date": "2026-05-29 00:00:00 +0200"}
+        ]
+      }
+    ]
+  }
+}

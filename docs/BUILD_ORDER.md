@@ -67,22 +67,32 @@ run on the laptop in a dedicated venv (.venv-dev) via uvicorn/python — NO Dock
 - exit/Ctrl-C reverts NPM; the watchdog reverts even on a hard kill.
 - Shell scripts pass `shellcheck`.
 
-## Phase 4 — iOS app (manual sync first)
+## Phase 4 — Ingestion client
 
-Implement Swift files per `ios/CLAUDE.md`. Manual path before background. The app
-targets the stable `https://healthbridge.example.com`, which Phase 3 flips to the
-laptop — so iOS work validates against local code through the real path.
+The PRIMARY client is the **Health Auto Export (HAE)** iOS app, which reads
+HealthKit and POSTs to `POST /ingest/hae`. The backend adapter
+(`backend/healthbridge/hae_adapter.py`) normalizes HAE's format to the canonical
+`IngestData` and reuses the `/ingest` write path. See `docs/HAE_SETUP.md`. The
+custom SwiftUI app under `ios/` is a **fallback** path.
 
-**Done when (manual):**
-- App requests HealthKit read auth for the 3 types.
-- Source picker lists sources writing sleep; Owner selects his Apple Watch.
-- "Sync now" reads last-N-days samples and POSTs with `Authorization: Bearer
-  <token>`; backend rows appear; cursors advance; UI shows last-sync + counts.
+Both target the stable `https://healthbridge.example.com`, which Phase 3 flips to the
+laptop — so client work validates against local code through the real path.
 
-**Done when (background, after manual works):**
-- BGTaskScheduler daily task registered and schedules.
-- HKObserverQuery enabled per type; new samples trigger a sync (best-effort on free
-  provisioning).
+**Done when (HAE — primary):**
+- HAE configured per `docs/HAE_SETUP.md` (3 metrics, summarize off, minutes, bearer
+  header) and a manual export POSTs to `/ingest/hae`.
+- Adapter filters to the Apple Watch source (SleepWatch dropped), maps stages,
+  converts to UTC, keys RHR by local date; backend rows appear and nights recompute.
+- Re-exporting the same window writes 0 new rows (idempotent).
+- `pytest` green incl. `test_hae_adapter.py` (source filter, stage map, UTC, RHR
+  date, endpoint idempotency + auth).
+- Prod: scheduled/automatic export enabled (HAE Premium).
+
+**Done when (custom iOS app — fallback):**
+- App requests HealthKit read auth for the 3 types; source picker lists sleep
+  sources; "Sync now" POSTs to `/ingest`; rows appear; cursors advance.
+- Background (after manual works): BGTaskScheduler daily task + HKObserverQuery per
+  type (best-effort on free provisioning).
 
 ## Phase 5 — Sleep MCP
 

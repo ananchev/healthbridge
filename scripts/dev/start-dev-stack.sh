@@ -114,7 +114,7 @@ screen -dmS healthbridge-dev -t backend bash -c "
     source .venv-dev/bin/activate
     pip install -q -e '.[dev]' >/tmp/healthbridge-dev-backend.log 2>&1 || { echo 'INSTALL FAILED — see /tmp/healthbridge-dev-backend.log'; exec bash; }
     echo '[backend] uvicorn on 0.0.0.0:8000 (APP_ENV=$BANNER_ENV) — reached via CF→NPM→laptop'
-    exec uvicorn healthbridge.app:app --host 0.0.0.0 --port 8000 --reload
+    exec uvicorn healthbridge.app:app --host 0.0.0.0 --port 8000 --reload --no-server-header
 "
 
 if (( RUN_MCP )); then
