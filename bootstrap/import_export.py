@@ -31,7 +31,7 @@ from datetime import datetime
 from healthbridge import db
 from healthbridge.models import HrvSample, RhrSample, SleepSample
 
-DEFAULT_SLEEP_SOURCE = "Apple\u00a0Watch van Owner"  # NBSP between Apple and Watch
+DEFAULT_SLEEP_SOURCE = "Apple\u00a0Watch"  # NBSP between Apple and Watch
 
 SLEEP_TYPE = "HKCategoryTypeIdentifierSleepAnalysis"
 HRV_TYPE = "HKQuantityTypeIdentifierHeartRateVariabilitySDNN"

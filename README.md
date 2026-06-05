@@ -42,7 +42,7 @@ curl localhost:8000/health
 cd backend && pip install -e .
 cd ..
 python -m bootstrap.import_export ~/Downloads/export.zip --db ./dev.duckdb \
-  --sleep-source "Apple Watch van Owner"   # mind the non-breaking space
+  --sleep-source "Apple Watch"   # mind the non-breaking space
 ```
 
 ## Local development (NPM-flip)

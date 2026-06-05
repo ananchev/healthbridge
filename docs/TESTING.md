@@ -33,8 +33,8 @@ this for every change. "It compiles" is not "it works." No phase in
    - Auth: missing header, malformed header, wrong token, correct token, dev bypass.
 
 6. **Bootstrap correctness check.** After implementing writes, run the bootstrap
-   against a real `export.zip` and assert the last 7 nights match the numbers Owner
-   already validated (≈6h47m avg asleep; per-night efficiency 90–98% for the
+   against a real `export.zip` and assert the last 7 nights match the
+   previously-validated numbers (≈6h47m avg asleep; per-night efficiency 90–98% for the
    sample week). Encode this as a test that runs only when a sample export is
    present (skip otherwise), so CI without the file still passes.
 

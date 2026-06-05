@@ -123,20 +123,20 @@ affected nights on each ingest (drop+reinsert that night's row, pure SQL).
 
 ```json
 {
-  "device_id": "example-iphone-16pm",
+  "device_id": "example-iphone",
   "synced_at": "2026-05-20T22:14:00Z",
   "data": {
     "sleep": [
       {"start": "2026-05-19T22:47:44Z", "end": "2026-05-19T23:04:46Z",
-       "stage": "AsleepCore", "source": "Apple Watch van Owner",
+       "stage": "AsleepCore", "source": "Apple Watch",
        "source_version": "11.4"}
     ],
     "hrv": [
       {"timestamp": "2026-05-19T23:30:00Z", "value_ms": 34.2,
-       "source": "Apple Watch van Owner"}
+       "source": "Apple Watch"}
     ],
     "rhr": [
-      {"date": "2026-05-20", "value_bpm": 55, "source": "Apple Watch van Owner"}
+      {"date": "2026-05-20", "value_bpm": 55, "source": "Apple Watch"}
     ]
   }
 }
@@ -158,13 +158,13 @@ HAE body (relevant subset; timestamps are local wall-clock with offset):
 {"data": {"metrics": [
   {"name": "sleep_analysis", "units": "hr", "data": [
     {"start": "2026-05-29 01:09:08 +0200", "end": "2026-05-29 01:11:08 +0200",
-     "value": "Core", "source": "Apple Watch van Owner"}]},
+     "value": "Core", "source": "Apple Watch"}]},
   {"name": "heart_rate_variability", "units": "ms", "data": [
     {"date": "2026-05-29 00:08:57 +0200", "qty": 31.5,
-     "source": "Apple Watch van Owner"}]},
+     "source": "Apple Watch"}]},
   {"name": "resting_heart_rate", "units": "count/min", "data": [
     {"date": "2026-05-29 00:00:38 +0200", "qty": 57,
-     "source": "Apple Watch van Owner"}]}
+     "source": "Apple Watch"}]}
 ]}}
 ```
 

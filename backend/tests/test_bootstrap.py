@@ -1,7 +1,7 @@
 """Bootstrap spot-check against a real Apple Health export.
 
 Skipped automatically when export.zip is absent (CI passes without the file).
-When present, validates that the last 7 nights match Owner's pre-verified numbers:
+When present, validates that the last 7 nights match the pre-verified numbers:
   - avg asleep ≈ 6h 47m (6.78 h)
   - per-night efficiency 90–98 %
   - thousands of sleep / hundreds of hrv / rhr rows

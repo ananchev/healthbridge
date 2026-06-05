@@ -22,8 +22,8 @@ from healthbridge.hae_adapter import HAEPayload, normalize
 FIXTURE = Path(__file__).parent / "fixtures" / "hae_sample.json"
 # Configured source uses a REGULAR space; the fixture source has a NON-BREAKING
 # space. Matching must be NBSP-insensitive.
-SLEEP_SOURCE = "Apple Watch van Owner"
-NBSP_SOURCE = "Apple Watch van Owner"
+SLEEP_SOURCE = "Apple Watch"
+NBSP_SOURCE = "Apple Watch"
 TOKEN = "testtoken"
 
 

@@ -73,7 +73,7 @@ In the HAE app's Auto Export screen:
 Set the Apple Watch source name so the adapter filters correctly:
 
 ```
-HEALTHBRIDGE_SLEEP_SOURCE=Apple Watch van Owner   # normal space is fine (NBSP-insensitive)
+HEALTHBRIDGE_SLEEP_SOURCE=Apple Watch   # normal space is fine (NBSP-insensitive)
 ```
 
 Unset/empty = keep all sources (no SleepWatch filtering) — not recommended.

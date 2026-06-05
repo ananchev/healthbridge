@@ -43,7 +43,7 @@ Verify the (already-written) parser wires to the now-implemented db.py functions
 - `nightly_summary` is populated for all historical nights.
 - Re-running the bootstrap writes 0 new rows (idempotent).
 - Spot-check (encode as a skip-if-absent test): the last 7 nights' asleep/efficiency
-  match Owner's validated numbers (≈6h47m avg asleep, 90–98% efficiency for the
+  match the validated numbers (≈6h47m avg asleep, 90–98% efficiency for the
   sample week).
 
 ## Phase 3 — Dev/e2e path: CF → NPM → laptop (NPM-flip)

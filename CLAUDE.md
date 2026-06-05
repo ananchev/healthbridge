@@ -48,7 +48,7 @@ writer. Everything else reads it read-only.
    + RHR only. If tempted, stop — that is the Wahoo pipeline's job.
 3. **Apple Watch is the sleep source.** Filter sleep samples to the Apple Watch
    source. The source name contains a NON-BREAKING SPACE (U+00A0) between "Apple"
-   and "Watch" — e.g. `"Apple\u00a0Watch van Owner"`. Naive `"Apple Watch"` matching
+   and "Watch" — e.g. `"Apple\u00a0Watch"`. Naive `"Apple Watch"` matching
    WILL fail. Make the source name configurable, not hardcoded. The primary client
    (Health Auto Export) exports BOTH Apple Watch and SleepWatch sleep, so the filter
    is enforced server-side in `hae_adapter.py` via `HEALTHBRIDGE_SLEEP_SOURCE`

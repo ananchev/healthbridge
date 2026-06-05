@@ -12,7 +12,7 @@ HAE shape (relevant subset):
     {"data": {"metrics": [
         {"name": "sleep_analysis", "units": "hr",
          "data": [{"start": "...", "end": "...", "value": "Core",
-                   "source": "Apple Watch van Owner"}]},
+                   "source": "Apple Watch"}]},
         {"name": "heart_rate_variability", "units": "ms",
          "data": [{"date": "...", "qty": 31.5, "source": "..."}]},
         {"name": "resting_heart_rate", "units": "count/min",
