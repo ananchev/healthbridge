@@ -84,9 +84,16 @@ writer. Everything else reads it read-only.
 - A "night" is defined noon-to-noon: a sample whose start is before 12:00 belongs
   to that calendar date's night; at/after 12:00 it belongs to the next day's night.
 - Sleep efficiency = asleep_seconds / (wake_time - bed_time) within the night.
-- HRV (SDNN) samples are captured during sleep, typically 5–15 per night. Average
-  them per night. Samples before noon belong to that night.
-- Resting HR: Apple writes one value per day. Key it by date.
+- Sleep is event-driven: the Watch emits a new segment on each stage change, so a
+  night has ~15–50 segments (median ~8 min, range ~1–75 min). This is the native
+  resolution — there is no sampling-rate control; capture it all (HAE "summarize off").
+- HRV (SDNN) is a periodic BACKGROUND measurement, not sleep-only: ~6 readings/DAY
+  at a steady ~4 h interval, around the clock (measured from real data — NOT
+  "5–15 per night" as earlier assumed). That means a noon-to-noon night usually
+  contains only ~2–3 HRV samples, so `nightly_summary.hrv_avg_ms` is averaged over a
+  small set. For a stable recovery signal use a multi-night rolling baseline, not one
+  night's average. Samples before noon belong to that night.
+- Resting HR: Apple writes one value per day (a daily computed value). Key it by date.
 - The Apple Watch is conservative about classifying stationary periods (e.g. car
   rides) as sleep — it does NOT need extra false-positive filtering for our purpose.
   (SleepWatch does over-classify, another reason we ignore it.)
