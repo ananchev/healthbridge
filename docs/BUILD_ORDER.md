@@ -87,19 +87,34 @@ laptop — so client work validates against local code through the real path.
   date, endpoint idempotency + auth).
 - Prod: scheduled/automatic export enabled (HAE Premium).
 
-## Phase 5 — Sleep MCP
+## Phase 5 — Sleep MCP (Resource Server) + shared OAuth AS
 
-Implement `mcp/sleep_mcp/server.py` tools (read-only DuckDB). In dev, run it in
-.venv-dev alongside the backend.
+`sleep-mcp` is a claude.ai web connector, so it needs OAuth 2.1. Auth is split into
+a shared **Authorization Server** (the proven cycling-coach OAuth server carved into
+its own repo `~/Development/mcp-auth`, plus rotating refresh tokens) and this
+**Resource Server**. See `docs/MCP_AUTH.md`. Tools are read-only DuckDB; in dev run
+in .venv-dev alongside the backend (`HEALTHBRIDGE_MCP_DEV=1` to skip auth).
 
-**Done when:**
+**Done when (tools):**
 - `get_latest_night()` returns the correct most-recent summary.
 - `get_nightly_range(start,end)` returns the expected rows.
-- `get_recovery_status()` returns green/yellow/red with reasoning derived from
-  HRV-vs-baseline + RHR-vs-baseline + 7-night sleep debt.
-- `mcp/tests/test_tools.py` green for all tools incl. the three recovery cases.
-- The existing cycling-coach MCP can reach its tools (or read the same DuckDB
-  read-only) for joins.
+- `get_recovery_status()` returns green/yellow/red from HRV-vs-baseline +
+  RHR-vs-baseline + 7-night sleep debt (HRV uses a multi-night rolling baseline —
+  a night holds only ~2-3 HRV samples).
+- `mcp/tests/test_tools.py` green incl. the three recovery cases; `ruff` clean.
+- The cycling-coach MCP can read the same DuckDB read-only for joins.
+
+**Done when (auth — AS repo):**
+- `go test ./...` green incl. refresh issue/rotate/reuse-revoke/persistence.
+- AS serves RFC 8414 discovery (`grant_types_supported` includes `refresh_token`),
+  DCR, authorize+PKCE, token (authorization_code + refresh_token).
+
+**Done when (RS auth + browser path):**
+- `/mcp` returns 401 + `WWW-Authenticate` (resource_metadata pointer) without a
+  token; 200 with an AS-issued token (verified locally — see docs/MCP_AUTH.md).
+- `/.well-known/oauth-protected-resource/mcp` advertises the AS; CORS preflight 204/200.
+- claude.ai adds sleep-mcp as a connector, completes OAuth, calls a tool; access
+  token refreshes silently after TTL. (Needs CF DNS + NPM proxy for mcp-auth.example.com.)
 
 ## Phase 6 — Prod deploy (only after laptop e2e is fully green)
 

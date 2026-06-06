@@ -85,6 +85,11 @@ an NPM Access List for browser use.
 
 **Stack:** Python, FastMCP. Opens DuckDB **read-only**.
 
+**Auth:** OAuth 2.1 Resource Server (claude.ai web connector). Tokens are issued by a
+shared Authorization Server (`mcp-auth`, separate repo) and verified here (HS256,
+same signing key). One AS, many Resource Servers. Full model, env vars, and the
+browser-path validation checklist: **`docs/MCP_AUTH.md`**.
+
 **Tools:**
 - `get_latest_night()` — most recent night's summary.
 - `get_nightly_summary(date)` — one night.
