@@ -199,10 +199,11 @@ the apps; it forwards over the LAN by IP:port (multiple Docker hosts).
   8000/8001 on the Docker host's LAN interface.
 - `health.duckdb` on a named volume, mounted RW in backend, RO in sleep-mcp.
 - NPM proxies `healthbridge.example.com → <docker-host-LAN-IP>:8000` and
-  `mcp-sleep.example.com → <docker-host-LAN-IP>:8001`.
+  `mcp-healthbridge.example.com → <docker-host-LAN-IP>:8001`.
 - The ingestion client (HAE) always targets the stable public hostname; only NPM's
   upstream IP differs between dev (laptop) and prod (Docker host).
-- Auth: backend bearer token (phone). Optional NPM Access List on `/stats`.
+- Auth: backend bearer token (phone) for ingest; sleep-mcp is OAuth (shared mcp-auth
+  AS, see `docs/MCP_AUTH.md`). Optional NPM Access List on `/stats` only.
 - See `deploy/NPM.md`.
 
 ## 9b. Local development

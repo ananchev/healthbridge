@@ -6,8 +6,9 @@ services:
     container_name: healthbridge-backend
     environment:
       HEALTHBRIDGE_DB: /data/health.duckdb
-      HEALTHBRIDGE_TOKEN: ${HEALTHBRIDGE_TOKEN}        # phone bearer token
-      APP_ENV: ${APP_ENV:-prod}                        # banner on /stats when != prod
+      HEALTHBRIDGE_TOKEN: ${HEALTHBRIDGE_TOKEN}                 # phone bearer token
+      HEALTHBRIDGE_SLEEP_SOURCE: ${HEALTHBRIDGE_SLEEP_SOURCE}   # Apple Watch filter (NBSP-insensitive)
+      APP_ENV: ${APP_ENV:-prod}                                 # banner on /stats when != prod
     volumes:
       - health-data:/data            # RW: backend is the sole writer
     ports:
@@ -23,8 +24,15 @@ services:
       dockerfile: ../deploy/mcp.Dockerfile
     container_name: healthbridge-sleep-mcp
     environment:
-      HEALTHBRIDGE_DB: /data/health.duckdb
-      HEALTHBRIDGE_TOKEN: ${HEALTHBRIDGE_TOKEN}        # if the MCP route is token-gated too
+      HEALTHBRIDGE_DB: /data/health.duckdb                      # opened read-only
+      HEALTHBRIDGE_TZ: ${HEALTHBRIDGE_TZ:-Europe/Amsterdam}     # bed/wake display tz
+      MCP_PORT: "8001"
+      # OAuth Resource Server — verifies bearer JWTs issued by the shared mcp-auth AS
+      # (separate repo/stack). Auth is ON whenever MCP_OAUTH_SIGNING_KEY is set, which
+      # MUST equal the AS's value, or tokens won't validate.
+      MCP_OAUTH_SIGNING_KEY: ${MCP_OAUTH_SIGNING_KEY}
+      MCP_AUTH_SERVER_URL: ${MCP_AUTH_SERVER_URL}
+      MCP_PUBLIC_URL: ${MCP_PUBLIC_URL}
     volumes:
       - health-data:/data:ro         # RO: MCP never writes
     ports:
@@ -36,11 +44,14 @@ services:
 volumes:
   health-data:
 
-# Networking model: NPM runs on a SEPARATE box on the LAN (with a port-forward on
-# the router for public access). These containers publish their ports on the Docker
-# host's LAN IP; NPM's proxy hosts forward to http://<docker-host-LAN-IP>:8000 and
-# :8001. No shared Docker network. See deploy/NPM.md.
+# Networking model: NPM runs on a SEPARATE box on the LAN (router :443 port-forward
+# for public access). These containers publish their ports on the Docker host's LAN
+# IP; NPM proxy hosts forward to http://<docker-host-LAN-IP>:8000 (healthbridge) and
+# :8001 (mcp-healthbridge). No shared Docker network. See deploy/NETWORKING.md.
+#
+# sleep-mcp is an OAuth Resource Server: the shared mcp-auth Authorization Server must
+# also be deployed and reachable (its own repo/compose), sharing MCP_OAUTH_SIGNING_KEY.
+# See docs/MCP_AUTH.md.
 #
 # If the Docker host has a firewall (ufw/nftables), allow the NPM box to reach
-# 8000/8001. Consider binding the published ports to the LAN IP only (see above)
-# so they're not exposed on unintended interfaces.
+# 8000/8001. Consider binding the published ports to the LAN IP only (see above).

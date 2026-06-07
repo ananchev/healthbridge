@@ -8,8 +8,11 @@ backend's bearer token (plus an optional NPM Access List on `/stats`).
 
 ## Hostnames
 
-- `healthbridge.example.com` → `<docker-host-LAN-IP>:8000`   (ingest API; phone posts here)
-- `mcp-sleep.example.com`    → `<docker-host-LAN-IP>:8001`   (MCP server; coach/Claude reach here)
+- `healthbridge.example.com`     → `<docker-host-LAN-IP>:8000`   (ingest API; phone posts here)
+- `mcp-healthbridge.example.com` → `<docker-host-LAN-IP>:8001`   (MCP server; coach/Claude reach here)
+
+The shared OAuth AS has its own host `mcp-auth.example.com` and lives in the separate
+`mcp-auth` repo/stack (its own deploy + NPM proxy). See `docs/MCP_AUTH.md`.
 
 ## Create the proxy hosts in NPM
 
@@ -35,9 +38,15 @@ Because we're not using CF Access, the backend authenticates requests itself:
   relies on the bearer token (the phone can't do interactive auth).
 - **Defense in depth:** keep `/ingest` bearer-only; optionally restrict source IPs
   in NPM's advanced config if your phone has a stable egress (usually it won't).
+- **sleep-mcp → OAuth, not the bearer token:** the MCP server is an OAuth 2.1
+  Resource Server. Claude authenticates against the shared `mcp-auth` AS and presents
+  a JWT that sleep-mcp verifies (shared `MCP_OAUTH_SIGNING_KEY`). Don't put an NPM
+  Access List in front of `mcp-healthbridge.example.com` — it would break the OAuth/
+  CORS handshake. See `docs/MCP_AUTH.md`.
 
 This replaces the previous CF-Access-Authenticated-User-Email trust model. The
-backend now owns auth via the bearer token — see `backend/healthbridge/auth.py`.
+backend owns ingest auth via the bearer token (`backend/healthbridge/auth.py`); the
+MCP owns its auth via OAuth.
 
 ## Networking model
 

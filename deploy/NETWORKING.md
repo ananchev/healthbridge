@@ -26,8 +26,11 @@ upstream IP does. Cloudflare is untouched by a flip.
 
 ## Hostnames (stable across dev and prod)
 
-- `healthbridge.example.com` → NPM → `<LAN-IP>:8000`  (ingest API; the phone posts here)
-- `mcp-sleep.example.com`    → NPM → `<LAN-IP>:8001`  (sleep MCP; coach/Claude reach here)
+- `healthbridge.example.com`     → NPM → `<LAN-IP>:8000`  (ingest API; the phone posts here)
+- `mcp-healthbridge.example.com` → NPM → `<LAN-IP>:8001`  (sleep MCP; coach/Claude reach here)
+
+A third host, `mcp-auth.example.com`, fronts the shared OAuth Authorization Server
+(separate `mcp-auth` repo/stack) that protects the MCP — see `docs/MCP_AUTH.md`.
 
 The ingestion client (Health Auto Export) always targets
 `https://healthbridge.example.com` — identical in dev and prod. In dev, NPM is
@@ -36,10 +39,14 @@ flipped to the laptop, so that hostname reaches local uvicorn.
 ## Auth
 
 Cloudflare here is DNS-only and does not authenticate. NPM does not authenticate
-the API routes either. The **backend owns auth** via a bearer token (`auth.py`):
-the phone sends `Authorization: Bearer <HEALTHBRIDGE_TOKEN>`. `/health` is open
-(liveness); `/ingest` and `/stats` require the token. Optionally add an NPM Access
-List on `/stats` for browser use.
+the API routes either. Auth differs by service:
+
+- **Ingest API (backend):** the **backend owns auth** via a bearer token (`auth.py`):
+  the phone sends `Authorization: Bearer <HEALTHBRIDGE_TOKEN>`. `/health` is open
+  (liveness); `/ingest`, `/ingest/hae`, `/stats` require the token.
+- **sleep-mcp:** an **OAuth 2.1 Resource Server**. Clients (Claude) authenticate
+  against the shared `mcp-auth` AS and present a bearer JWT, which sleep-mcp verifies
+  with the shared `MCP_OAUTH_SIGNING_KEY`. Not the backend token. See `docs/MCP_AUTH.md`.
 
 ## Firewall
 

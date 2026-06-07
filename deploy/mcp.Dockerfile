@@ -9,6 +9,6 @@ RUN pip install --no-cache-dir .
 VOLUME ["/data"]
 EXPOSE 8001
 
-# Adjust transport/port to match how your cycling-coach MCP is served
-# (stdio vs HTTP/SSE). FastMCP supports multiple transports.
+# Serves Streamable HTTP on 0.0.0.0:${MCP_PORT:-8001} via build_app() (FastMCP +
+# CORS). Auth is enabled when MCP_OAUTH_SIGNING_KEY is set (see docker-compose.yml).
 CMD ["python", "-m", "sleep_mcp.server"]
