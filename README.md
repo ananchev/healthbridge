@@ -1,106 +1,86 @@
 # HealthBridge
 
-Pull Apple Watch **sleep + HRV + resting-HR** from Apple HealthKit into a
-locally-hosted DuckDB store, exposed to LLM tooling (cycling-coach MCP, Claude) via
-a dedicated read-only MCP server.
+HealthBridge pulls **Apple Watch sleep, heart-rate variability (HRV), and resting
+heart rate** out of Apple HealthKit into a private, locally-hosted store, derives
+nightly sleep and recovery metrics, and exposes them to LLM tools (Claude, a
+cycling-coach MCP) through a dedicated **read-only MCP server**.
 
-**Sleep-domain only.** Training/ride data lives in a separate Wahoo pipeline and is
-intentionally excluded here.
+Single-user and self-hosted. **Sleep-domain only** — training/ride data lives in a
+separate pipeline and is intentionally excluded.
 
-## Repo layout
+## What it gives you
+
+- **A queryable history of your sleep & recovery** — every night's stages,
+  efficiency, HRV and resting HR, kept locally in DuckDB.
+- **Recovery answers for an LLM coach** — Claude (or the cycling-coach MCP) can ask
+  "how did I sleep?", "what's my HRV trend?", "am I recovered?" and get structured,
+  reasoned answers.
+- **Hands-off capture** — the Health Auto Export iOS app syncs HealthKit to the
+  backend on a schedule; re-sends are safe (ingest is idempotent).
+
+## How it works
 
 ```
-backend/     FastAPI ingestion service + DuckDB writes (the ONLY writer)
-mcp/         sleep-mcp — read-only MCP server (FastMCP)
-bootstrap/   one-shot importer: seed history from an Apple Health export.zip
-deploy/      Dockerfiles, docker-compose (NPM network), NPM setup guide
-scripts/dev/ Local-dev launcher + NPM-flip tooling (run locally, flip NPM)
-docs/        SPEC.md (full specification)
-CLAUDE.md    guidance for Claude Code — READ THIS FIRST
+Apple Watch → HealthKit
+      │  Health Auto Export (iOS app, scheduled)
+      ▼  HTTPS  POST /ingest/hae   (bearer token)
+Ingestion service (FastAPI) ──writes──▶ health.duckdb  (UTC, idempotent)
+                                              │ read-only
+   Claude (web) ──OAuth──▶ sleep-mcp (MCP) ◀──┤
+                             ▲                 │ read-only
+   mcp-auth (shared OAuth AS, separate repo)   └──◀ cycling-coach MCP
 ```
 
-## Start here
+- The DuckDB file is the integration boundary: **the ingestion service is the only
+  writer**; everything else opens it read-only.
+- Storage is UTC; a "night" is **noon-to-noon** (Europe/Amsterdam). Times are
+  localized for display at read time.
 
-1. Read `CLAUDE.md` (root) and `docs/SPEC.md`.
-2. Follow the build order in `CLAUDE.md` / `docs/BUILD_ORDER.md`:
-   backend → bootstrap → scripts/dev → deploy → HAE client → mcp.
+## What Claude can ask (MCP tools)
 
-## Quick local dev (backend)
+| Tool | Returns |
+|---|---|
+| `get_latest_night` | most recent night — stages, efficiency, HRV, RHR (local times + raw seconds) |
+| `get_nightly_summary(date)` | one night by date |
+| `get_nightly_range(start, end)` | nights in a date range |
+| `get_hrv_trend(days)` | HRV series + rolling baseline |
+| `get_sleep_debt(window, target)` | cumulative shortfall **and** net debt vs target |
+| `get_recovery_status` | green / yellow / red from HRV-vs-baseline, RHR-vs-baseline, and 7-night sleep debt, with reasons |
 
-```bash
-cd backend
-pip install -e ".[dev]"
-HEALTHBRIDGE_DEV=1 HEALTHBRIDGE_DB=./dev.duckdb uvicorn healthbridge.app:app --reload
-# then in another shell:
-curl localhost:8000/health
-```
+## What's captured
 
-## Seed history from an existing export
+- **Sleep** — Apple Watch stage-level segments (Core/Deep/REM/Awake), rolled up into
+  nightly efficiency and per-stage durations.
+- **HRV (SDNN)** — Apple's periodic background readings (~6/day).
+- **Resting HR** — one value per day.
 
-```bash
-cd backend && pip install -e .
-cd ..
-python -m bootstrap.import_export ~/Downloads/export.zip --db ./dev.duckdb \
-  --sleep-source "Apple Watch"   # mind the non-breaking space
-```
+Apple Watch is the source; the noisier two-state SleepWatch data is filtered out.
 
-## Local development (NPM-flip)
+## Access & auth
 
-Run the real backend + MCP on your laptop and flip the production NPM upstreams to
-point at it — test through the real hostnames without deploying. Auto-reverts on exit.
+- **Ingestion** (`/ingest`, `/ingest/hae`) — bearer token; the iOS app sends it on
+  every request.
+- **MCP** (`sleep-mcp`) — OAuth 2.1: Claude authenticates against the shared
+  `mcp-auth` authorization server, and sleep-mcp verifies the issued token.
 
-```bash
-cp .env.dev.example .env.dev    # fill in NPM details + proxy IDs
-./scripts/dev/start-dev-stack.sh            # flip + run; Ctrl-C reverts
-./scripts/dev/start-dev-stack.sh --no-flip  # localhost only, no NPM changes
-```
+## Components
 
-See `scripts/dev/README.md`.
+| Path | Role |
+|---|---|
+| `backend/` | FastAPI ingestion + DuckDB writes — the **only** writer |
+| `mcp/` | `sleep-mcp` — read-only MCP server (OAuth Resource Server) |
+| `bootstrap/` | one-shot importer to seed history from an Apple Health `export.zip` |
+| `deploy/` | Dockerfiles, compose, networking/NPM guide |
+| `scripts/dev/` | local-run + NPM-flip development tooling |
+| `docs/` | full specification and setup guides |
+| `mcp-auth` *(separate repo)* | shared OAuth 2.1 Authorization Server for the MCP connectors |
 
-## Ingestion client — Health Auto Export (HAE)
+## Documentation
 
-The [Health Auto Export](https://github.com/Lybron/health-auto-export) iOS app reads
-HealthKit and POSTs to `POST /ingest/hae` (target the stable
-`https://healthbridge.example.com` — the NPM-flip tooling routes it to the laptop in
-dev). The backend adapter (`backend/healthbridge/hae_adapter.py`) normalizes HAE's
-format (filters to the Apple Watch source, maps stages, converts to UTC) and reuses
-the `/ingest` write path.
-
-Configure per **`docs/HAE_SETUP.md`**: enable only Sleep + HRV + Resting Heart Rate,
-summarize OFF, time grouping minutes, header `Authorization,Bearer <token>`. Set
-`HEALTHBRIDGE_SLEEP_SOURCE` on the backend so SleepWatch is filtered out (HAE exports
-both Apple Watch and SleepWatch). NBSP in the source name is handled — a normal space
-in the config matches.
-
-## Deploy
-
-```bash
-cd deploy
-cp ../.env.example .env   # fill in HEALTHBRIDGE_TOKEN, BACKEND_PORT, etc.
-docker compose up --build
-```
-
-Topology: Cloudflare (DNS proxy) → router :443 → NPM container → `<LAN-IP>:port`.
-NPM forwards over the LAN by IP:port (no shared Docker network). Dev flips the
-upstream to the laptop; prod flips it to a Docker host. The backend authenticates
-the phone with a bearer token. See `deploy/NETWORKING.md` and `deploy/NPM.md`.
-
-## Testing
-
-Strict TDD — see `docs/TESTING.md`. Every unit of logic is pinned by a test;
-`pytest` + `ruff` green before any build phase is done; idempotency tests are
-mandatory on write paths.
-
-```bash
-cd backend && pip install -e ".[dev]" && pytest && ruff check
-```
-
-## Key gotchas (learned the hard way)
-
-- The Apple Watch HealthKit source name contains a **non-breaking space** (U+00A0)
-  between "Apple" and "Watch". Plain-space matching fails. Source name is
-  configurable everywhere.
-- A "night" is **noon-to-noon**. Sample start < 12:00 local → that date's night.
-- Apple Watch sleep is **stage-level** (REM/Core/Deep/Awake). SleepWatch is
-  two-state and noisier — we ignore it.
-- Ingest is **idempotent**; the phone re-sends overlapping batches freely.
+- **`docs/SPEC.md`** — full system specification.
+- **`docs/HAE_SETUP.md`** — configure the Health Auto Export iOS app.
+- **`docs/MCP_AUTH.md`** — the OAuth model (shared AS + resource servers), env, validation.
+- **`deploy/NETWORKING.md`** — topology, NPM, and deployment.
+- **`docs/BUILD_ORDER.md`** and **`scripts/dev/README.md`** — development & local-test workflow.
+- **`docs/TESTING.md`** — testing discipline.
+- **`CLAUDE.md`** — guidance for Claude Code working in this repo.
