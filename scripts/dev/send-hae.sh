@@ -8,7 +8,7 @@
 #   ./scripts/dev/send-hae.sh <export.json> --local     → http://localhost:8000
 #   ./scripts/dev/send-hae.sh <export.json> --url <base>
 #
-# Pair with run-dev-backend.sh (public) or run-dev-backend.sh --no-flip (--local).
+# Pair with start-dev-stack.sh --backend-only (public) or with --no-flip (--local).
 # Reads HEALTHBRIDGE_TOKEN from .env.dev.
 
 set -euo pipefail

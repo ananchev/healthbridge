@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
-# scripts/dev/start-dev-stack.sh — main local-dev launcher for HealthBridge.
+# scripts/dev/start-dev-stack.sh — the single local-dev launcher for HealthBridge.
 #
-# Mirrors the cycling-coach pattern:
-#   - flips NPM upstreams (healthbridge + mcp-sleep proxies) to this laptop's LAN IP
-#     so the real public path (Cloudflare → NPM → laptop) hits local code
-#   - spawns a `healthbridge-dev` screen session with backend + mcp windows
-#   - runs each service in a DEDICATED venv (.venv-dev) via uvicorn/python — no Docker
-#   - injects APP_ENV banner so a flipped local session is visually distinct
-#   - schedules a remote watchdog as a fallback and auto-reverts NPM on exit
+# Flips NPM upstreams (healthbridge + mcp-healthbridge proxies) to this laptop's LAN
+# IP so the real public path (Cloudflare → NPM → laptop) hits local code, then runs
+# the backend and sleep-mcp IN THE FOREGROUND with combined, prefixed logs. Ctrl-C
+# stops both services and reverts NPM. No screen, no Docker — dedicated .venv-dev per
+# service via uvicorn/python.
 #
-# Usage: ./scripts/dev/start-dev-stack.sh [--no-flip] [--no-mcp]
-#                                         [--ip <addr>] [--max-runtime <duration>]
+# Usage:
+#   ./scripts/dev/start-dev-stack.sh                 flip + run backend + sleep-mcp
+#   ./scripts/dev/start-dev-stack.sh --backend-only  backend only (e.g. HAE ingest test)
+#   ./scripts/dev/start-dev-stack.sh --mcp-only      sleep-mcp only (e.g. claude.ai MCP test)
+#   ./scripts/dev/start-dev-stack.sh --no-flip       run locally, no NPM change
+#   ./scripts/dev/start-dev-stack.sh --ip <addr>     force the laptop IP NPM points to
+#   ./scripts/dev/start-dev-stack.sh --max-runtime "30 minutes"   watchdog deadline
 #
-# Reads .env.dev at the repo root (copy from .env.dev.example).
-#
-# NOTE for Claude Code: this is a working-shaped script but treat the NPM API
-# specifics as TODO to verify against the real NPM instance. Keep the rollback
-# wholesale-PUT approach from cycling-coach/npm-flip.sh (store full writable proxy
-# object, restore by PUTting it back — handles per-location overrides).
+# Reads .env.dev at the repo root (copy from .env.dev.example). sleep-mcp auth is ON
+# whenever MCP_OAUTH_SIGNING_KEY is set in .env.dev; export HEALTHBRIDGE_MCP_DEV=1 for
+# the --no-flip localhost path to bypass it.
 
 set -euo pipefail
 
@@ -25,115 +25,104 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
 FLIP=1
+RUN_BACKEND=1
 RUN_MCP=1
 IP_OVERRIDE=""
 MAX_RUNTIME="2 hours"
 
-usage() {
-    grep '^# ' "$0" | sed 's/^# //'
-}
+usage() { grep '^# ' "$0" | sed 's/^# //'; }
+log() { echo "[dev-stack] $*"; }
+die() { echo "[dev-stack] $*" >&2; exit 2; }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --no-flip)     FLIP=0 ;;
-        --no-mcp)      RUN_MCP=0 ;;
-        --ip)          IP_OVERRIDE="${2:?}"; shift ;;
-        --max-runtime) MAX_RUNTIME="${2:?}"; shift ;;
-        -h|--help)     usage; exit 0 ;;
-        *) echo "start-dev-stack.sh: unknown arg: $1" >&2; usage; exit 2 ;;
+        --no-flip)      FLIP=0 ;;
+        --backend-only) RUN_MCP=0 ;;
+        --mcp-only)     RUN_BACKEND=0 ;;
+        --ip)           IP_OVERRIDE="${2:?--ip needs an address}"; shift ;;
+        --max-runtime)  MAX_RUNTIME="${2:?--max-runtime needs a duration}"; shift ;;
+        -h|--help)      usage; exit 0 ;;
+        *) die "unknown arg: $1" ;;
     esac
     shift
 done
 
-if [[ ! -f .env.dev ]]; then
-    echo "start-dev-stack.sh: missing .env.dev — copy .env.dev.example and fill it in" >&2
-    exit 2
-fi
+[[ -f .env.dev ]] || die "missing .env.dev — copy .env.dev.example and fill it in"
 set -a
 # shellcheck disable=SC1091
 source .env.dev
 set +a
 
-log() { echo "[start-dev-stack.sh] $*"; }
-
-# ─── detect laptop IP ────────────────────────────────────────────────────
+# ─── detect laptop IP ────────────────────────────────────────────────────────
 detect_ip() {
     if [[ -n "$IP_OVERRIDE" ]]; then echo "$IP_OVERRIDE"; return; fi
     local addrs
     addrs="$(ip -4 -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1 || \
              ifconfig 2>/dev/null | awk '/inet /{print $2}')"
-    for prefix in $LAPTOP_SUBNETS; do
+    for prefix in ${LAPTOP_SUBNETS:-}; do
         for a in $addrs; do
             [[ "$a" == "$prefix"* ]] && { echo "$a"; return; }
         done
     done
-    echo "start-dev-stack.sh: no interface IP matches LAPTOP_SUBNETS ($LAPTOP_SUBNETS)" >&2
-    echo "       available: $(echo "$addrs")" >&2
-    exit 2
+    die "no interface IP matches LAPTOP_SUBNETS (${LAPTOP_SUBNETS:-unset}); available: $addrs"
 }
 
-LAPTOP_IP="$(detect_ip)"
-log "laptop IP: $LAPTOP_IP"
-
-# ─── NPM flip ──────────────────────────────────────────────────────────────
-if (( FLIP )); then
-    log "flipping NPM upstreams → $LAPTOP_IP"
-    ./scripts/dev/npm-flip.sh laptop "$LAPTOP_IP"
-    # Schedule the remote watchdog as a safety net (auto-revert if we crash).
-    ./scripts/dev/npm-flip.sh schedule-watchdog "$MAX_RUNTIME" || \
-        log "WARN: could not schedule watchdog; manual revert may be needed"
-fi
-
+# ─── flip + auto-revert ──────────────────────────────────────────────────────
+cleaned=0
 cleanup() {
-    log "cleanup: reaping dev processes"
-    pkill -f 'healthbridge-dev-backend|healthbridge-dev-mcp' 2>/dev/null || true
+    (( cleaned )) && return
+    cleaned=1
+    log "stopping services …"
+    pkill -P $$ 2>/dev/null || true
     if (( FLIP )); then
         log "reverting NPM upstreams → prod"
         ./scripts/dev/npm-flip.sh prod || log "WARN: NPM revert failed — run npm-flip.sh prod manually"
     fi
 }
-trap cleanup INT TERM HUP EXIT
+trap cleanup EXIT INT TERM
 
-# ─── banner ──────────────────────────────────────────────────────────────
-# Hostname (not IP) to avoid privacy-extension WebRTC-leak stripping.
-BANNER_ENV="${APP_ENV:-dev} hosted from $(hostname -s)"
-
-# ─── spawn screen session ────────────────────────────────────────────────
-screen -S healthbridge-dev -X quit 2>/dev/null || true
-
-# Backend window — fresh venv install + uvicorn against dev.duckdb.
-screen -dmS healthbridge-dev -t backend bash -c "
-    cd '$REPO_ROOT/backend'
-    set -a; source '$REPO_ROOT/.env.dev'; set +a
-    export APP_ENV='$BANNER_ENV'
-    # NOTE: do NOT set HEALTHBRIDGE_DEV here — dev e2e goes through CF→NPM and MUST
-    # exercise the real bearer-token auth. HEALTHBRIDGE_DEV=1 is only for hitting
-    # localhost directly (the --no-flip path), set it yourself if you do that.
-    echo '[backend] creating/using dedicated venv .venv-dev …'
-    python3 -m venv .venv-dev
-    source .venv-dev/bin/activate
-    pip install -q -e '.[dev]' >/tmp/healthbridge-dev-backend.log 2>&1 || { echo 'INSTALL FAILED — see /tmp/healthbridge-dev-backend.log'; exec bash; }
-    echo '[backend] uvicorn on 0.0.0.0:8000 (APP_ENV=$BANNER_ENV) — reached via CF→NPM→laptop'
-    exec uvicorn healthbridge.app:app --host 0.0.0.0 --port 8000 --reload --no-server-header
-"
-
-if (( RUN_MCP )); then
-    screen -S healthbridge-dev -X screen -t mcp bash -c "
-        cd '$REPO_ROOT/mcp'
-        set -a; source '$REPO_ROOT/.env.dev'; set +a
-        export APP_ENV='$BANNER_ENV'
-        echo '[mcp] creating/using dedicated venv .venv-dev …'
-        python3 -m venv .venv-dev
-        source .venv-dev/bin/activate
-        pip install -q -e '.[dev]' >/tmp/healthbridge-dev-mcp.log 2>&1 || { echo 'INSTALL FAILED — see /tmp/healthbridge-dev-mcp.log'; exec bash; }
-        echo '[mcp] starting sleep-mcp on 0.0.0.0:8001'
-        exec python -m sleep_mcp.server
-    "
+if (( FLIP )); then
+    LAPTOP_IP="$(detect_ip)"
+    log "laptop IP: $LAPTOP_IP"
+    log "flipping NPM upstreams → $LAPTOP_IP"
+    ./scripts/dev/npm-flip.sh laptop "$LAPTOP_IP"
+    ./scripts/dev/npm-flip.sh schedule-watchdog "$MAX_RUNTIME" || \
+        log "WARN: could not schedule watchdog; manual revert may be needed"
 fi
 
-log "screen session 'healthbridge-dev' up. Attach: screen -r healthbridge-dev"
-log "  Ctrl-A 0/1 to switch backend/mcp windows; Ctrl-A d to detach (NPM auto-reverts on exit)."
-log "Tailing — Ctrl-C to tear down (reverts NPM, reaps processes)."
+BANNER_ENV="${APP_ENV:-dev} hosted from $(hostname -s)"
 
-# Keep the launcher in the foreground so the trap runs on Ctrl-C.
-while screen -list | grep -q healthbridge-dev; do sleep 5; done
+# ─── service runners (backgrounded, prefixed combined logs) ──────────────────
+start_backend() {
+    (
+        cd "$REPO_ROOT/backend"
+        python3 -m venv .venv-dev
+        # shellcheck disable=SC1091
+        source .venv-dev/bin/activate
+        pip install -q -e '.[dev]'
+        export APP_ENV="$BANNER_ENV"
+        # NOTE: do NOT set HEALTHBRIDGE_DEV here — the flipped CF→NPM→laptop path
+        # must exercise real bearer auth. Set it yourself only for --no-flip.
+        exec uvicorn healthbridge.app:app --host 0.0.0.0 --port 8000 --reload --no-server-header
+    ) 2>&1 | awk '{ print "[backend] " $0; fflush() }' &
+}
+
+start_mcp() {
+    (
+        cd "$REPO_ROOT/mcp"
+        python3 -m venv .venv-dev
+        # shellcheck disable=SC1091
+        source .venv-dev/bin/activate
+        pip install -q -e '.[dev]'
+        # HEALTHBRIDGE_DB in .env.dev is relative to backend/; resolve to the real
+        # backend dev DB (opened read-only) since our cwd is mcp/.
+        export HEALTHBRIDGE_DB="$REPO_ROOT/backend/dev.duckdb"
+        exec python -m sleep_mcp.server
+    ) 2>&1 | awk '{ print "[mcp] " $0; fflush() }' &
+}
+
+(( RUN_BACKEND )) && { log "starting backend on 0.0.0.0:8000"; start_backend; }
+(( RUN_MCP ))     && { log "starting sleep-mcp on 0.0.0.0:8001"; start_mcp; }
+
+log "stack up. Ctrl-C to stop (services reaped, NPM reverted)."
+wait
