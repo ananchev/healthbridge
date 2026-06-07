@@ -14,11 +14,15 @@ from __future__ import annotations
 import os
 from datetime import date
 from statistics import mean
+from zoneinfo import ZoneInfo
 
 import duckdb
 from fastmcp import FastMCP
 
 DB_PATH = os.environ.get("HEALTHBRIDGE_DB", "/data/health.duckdb")
+# Storage is UTC; display is a read-time concern (CLAUDE.md #4). bed/wake times are
+# localized to this zone for humans. v1 assumes Europe/Amsterdam (matches db.py).
+LOCAL_TZ = ZoneInfo(os.environ.get("HEALTHBRIDGE_TZ", "Europe/Amsterdam"))
 
 # ── Resource-server / auth config ────────────────────────────────────────────
 AUTH_SERVER_URL = os.environ.get("MCP_AUTH_SERVER_URL", "https://mcp-auth.example.com")
@@ -58,7 +62,10 @@ mcp = FastMCP("sleep-mcp", auth=_build_auth())
 
 
 def _ro_conn() -> duckdb.DuckDBPyConnection:
-    return duckdb.connect(DB_PATH, read_only=True)
+    conn = duckdb.connect(DB_PATH, read_only=True)
+    # Return/render TIMESTAMPTZ in UTC (we store UTC; keep it UTC on the wire).
+    conn.execute("SET TimeZone='UTC'")
+    return conn
 
 
 # nightly_summary columns, in query order.
@@ -94,8 +101,9 @@ def _night_to_dict(row: tuple) -> dict:
     d = dict(zip(_NIGHT_COLS, row, strict=True))
     return {
         "night_date": str(d["night_date"]),
-        "bed_time": d["bed_time"].isoformat() if d["bed_time"] else None,
-        "wake_time": d["wake_time"].isoformat() if d["wake_time"] else None,
+        # Localized to LOCAL_TZ for human reading (stored UTC, converted at read time).
+        "bed_time": d["bed_time"].astimezone(LOCAL_TZ).isoformat() if d["bed_time"] else None,
+        "wake_time": d["wake_time"].astimezone(LOCAL_TZ).isoformat() if d["wake_time"] else None,
         "time_in_bed_seconds": d["time_in_bed_seconds"],
         "time_in_bed": _fmt_hms(d["time_in_bed_seconds"]),
         "asleep_seconds": d["asleep_seconds"],
@@ -161,14 +169,25 @@ def get_hrv_trend(days: int = 30) -> dict:
     vals = [v for _, v in rows if v is not None]
     return {
         "days": days,
+        # Mean over the returned window, INCLUDING the latest night. Note this differs
+        # from get_recovery_status, which excludes the latest night from its baseline.
         "baseline_ms": _round(mean(vals)) if vals else None,
+        "baseline_nights": len(vals),
+        "baseline_includes_latest": True,
         "series": series,
     }
 
 
 @mcp.tool
 def get_sleep_debt(window_days: int = 7, target_hours: float = SLEEP_TARGET_HOURS) -> dict:
-    """Return accumulated sleep deficit vs target over the most recent window."""
+    """Return accumulated sleep deficit vs target over the most recent window.
+
+    Two figures, because oversleep is treated differently:
+      - debt_hours: sum of per-night shortfalls, with surplus nights floored at 0
+        (oversleep gives NO credit). This is the recovery-relevant number.
+      - net_debt_hours: target*nights - total slept (oversleep DOES offset; may be
+        negative). This is what summing per_night by hand reproduces.
+    """
     conn = _ro_conn()
     try:
         rows = conn.execute(
@@ -180,15 +199,18 @@ def get_sleep_debt(window_days: int = 7, target_hours: float = SLEEP_TARGET_HOUR
         conn.close()
     per_night = []
     debt = 0.0
+    total = 0.0
     for d, asleep in reversed(rows):
         hours = (asleep or 0) / 3600
+        total += hours
         debt += max(0.0, target_hours - hours)
         per_night.append({"night_date": str(d), "asleep_hours": round(hours, 2)})
     return {
         "window_days": window_days,
         "target_hours": target_hours,
         "nights_counted": len(rows),
-        "debt_hours": round(debt, 1),
+        "debt_hours": round(debt, 1),  # cumulative shortfall, no oversleep credit
+        "net_debt_hours": round(target_hours * len(rows) - total, 1),  # may be negative
         "per_night": per_night,
     }
 
@@ -220,6 +242,12 @@ def get_recovery_status() -> dict:
     reasons: list[str] = []
     metrics: dict = {}
 
+    # Baselines use the PRIOR nights (latest excluded) so "today vs history" is
+    # meaningful. NOTE: get_hrv_trend's baseline INCLUDES the latest night and uses
+    # its own window, so the two HRV baselines legitimately differ — both label their
+    # window/count to make that explicit.
+    metrics["baseline_excludes_latest"] = True
+
     # HRV vs baseline (lower is worse).
     latest_hrv = latest[2]
     hist_hrv = [r[2] for r in prior if r[2] is not None]
@@ -227,9 +255,11 @@ def get_recovery_status() -> dict:
         base = mean(hist_hrv)
         metrics["hrv_latest_ms"] = _round(latest_hrv)
         metrics["hrv_baseline_ms"] = _round(base)
+        metrics["hrv_baseline_nights"] = len(hist_hrv)
         if base > 0 and latest_hrv < HRV_FLAG_RATIO * base:
             reasons.append(
-                f"HRV {latest_hrv:.0f}ms is below {HRV_FLAG_RATIO:.0%} of the {base:.0f}ms baseline"
+                f"HRV {latest_hrv:.0f}ms is below {HRV_FLAG_RATIO:.0%} of the "
+                f"{base:.0f}ms baseline ({len(hist_hrv)}-night)"
             )
 
     # RHR vs baseline (higher is worse).
@@ -239,21 +269,51 @@ def get_recovery_status() -> dict:
         base = mean(hist_rhr)
         metrics["rhr_latest_bpm"] = _round(latest_rhr)
         metrics["rhr_baseline_bpm"] = _round(base)
+        metrics["rhr_baseline_nights"] = len(hist_rhr)
         if latest_rhr > base + RHR_FLAG_DELTA:
             reasons.append(
                 f"RHR {latest_rhr:.0f}bpm is more than {RHR_FLAG_DELTA:.0f} over the "
-                f"{base:.0f}bpm baseline"
+                f"{base:.0f}bpm baseline ({len(hist_rhr)}-night)"
             )
 
-    # Sleep debt over the last 7 nights.
+    # Sleep debt over the last 7 nights (cumulative shortfall, no oversleep credit).
     last7 = rows[:7]
     debt = sum(max(0.0, SLEEP_TARGET_HOURS - (r[1] or 0) / 3600) for r in last7)
     metrics["sleep_debt_hours"] = round(debt, 1)
+    metrics["sleep_debt_window_nights"] = len(last7)
     if debt > SLEEP_DEBT_FLAG_HOURS:
         reasons.append(f"sleep debt {debt:.1f}h over the last {len(last7)} nights")
 
     status = "green" if not reasons else "yellow" if len(reasons) == 1 else "red"
     return {"status": status, "reasons": reasons, "metrics": metrics}
+
+
+# ── Discovery aliases (unauthenticated) ──────────────────────────────────────
+# claude.ai (and other clients) probe the host root and the ROOT-level RFC 9728
+# document before falling back to the WWW-Authenticate pointer. FastMCP only serves
+# the path-scoped /.well-known/oauth-protected-resource/mcp, so we add a root-level
+# alias for broader client compatibility, plus a / liveness to quiet base-URL probes.
+
+
+@mcp.custom_route("/", methods=["GET", "HEAD", "POST"])
+async def _root_liveness(request):
+    from starlette.responses import JSONResponse
+
+    return JSONResponse({"status": "ok"})
+
+
+@mcp.custom_route("/.well-known/oauth-protected-resource", methods=["GET"])
+async def _protected_resource_root(request):
+    from starlette.responses import JSONResponse
+
+    return JSONResponse(
+        {
+            "resource": f"{PUBLIC_URL}/mcp",
+            "authorization_servers": [AUTH_SERVER_URL],
+            "bearer_methods_supported": ["header"],
+            "scopes_supported": [],
+        }
+    )
 
 
 def build_app():

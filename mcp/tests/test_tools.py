@@ -78,6 +78,10 @@ def test_get_latest_night(monkeypatch, tmp_path):
             {"night_date": date(2026, 6, 1), "asleep_seconds": 1, "hrv_avg_ms": 1},
             {
                 "night_date": date(2026, 6, 2),
+                # TIMESTAMPTZ columns (stored UTC) — exercises the DuckDB→datetime
+                # (pytz) read path AND the read-time localization to Europe/Amsterdam.
+                "bed_time": "2026-06-01T20:00:00+00:00",  # → 22:00 CEST
+                "wake_time": "2026-06-02T03:05:00+00:00",  # → 05:05 CEST
                 "time_in_bed_seconds": 25500,  # 7h05m
                 "asleep_seconds": 24420,  # 6h47m
                 "efficiency_pct": 95.76,
@@ -93,6 +97,10 @@ def test_get_latest_night(monkeypatch, tmp_path):
     assert out["asleep_seconds"] == 24420
     assert out["efficiency_pct"] == 95.8  # rounded to 1dp
     assert out["hrv_avg_ms"] == 41.2
+    # TIMESTAMPTZ localized to Europe/Amsterdam (DST-aware: June → CEST +02:00).
+    # Regression guard for both the pytz import path and the tz conversion applying.
+    assert out["bed_time"] == "2026-06-01T22:00:00+02:00"
+    assert out["wake_time"] == "2026-06-02T05:05:00+02:00"
 
 
 def test_get_latest_night_empty(monkeypatch, tmp_path):
@@ -124,6 +132,10 @@ def test_recovery_status_green(monkeypatch, tmp_path):
     out = server.get_recovery_status()
     assert out["status"] == "green"
     assert out["reasons"] == []
+    # Baseline is labelled + excludes the latest night (10 prior nights here).
+    assert out["metrics"]["baseline_excludes_latest"] is True
+    assert out["metrics"]["hrv_baseline_nights"] == 10
+    assert out["metrics"]["rhr_baseline_nights"] == 10
 
 
 def test_recovery_status_yellow(monkeypatch, tmp_path):
@@ -158,12 +170,19 @@ def test_recovery_status_no_data(monkeypatch, tmp_path):
 # ── trends ────────────────────────────────────────────────────────────────────
 
 
-def test_get_sleep_debt(monkeypatch, tmp_path):
-    # 3 nights at 6h vs 8h target → 6h debt.
-    nights = [{"night_date": date(2026, 6, d), "asleep_seconds": 6 * 3600} for d in (1, 2, 3)]
+def test_get_sleep_debt_cumulative_vs_net(monkeypatch, tmp_path):
+    # 6h, 6h, 10h vs 8h target. Cumulative shortfall floors oversleep at 0:
+    #   debt_hours = 2 + 2 + 0 = 4.0
+    # Net credits the 10h night: net = 8*3 - 22 = 2.0
+    nights = [
+        {"night_date": date(2026, 6, 1), "asleep_seconds": 6 * 3600},
+        {"night_date": date(2026, 6, 2), "asleep_seconds": 6 * 3600},
+        {"night_date": date(2026, 6, 3), "asleep_seconds": 10 * 3600},
+    ]
     _seed(monkeypatch, tmp_path, nights)
     out = server.get_sleep_debt(window_days=7, target_hours=8.0)
-    assert out["debt_hours"] == 6.0
+    assert out["debt_hours"] == 4.0
+    assert out["net_debt_hours"] == 2.0
     assert out["nights_counted"] == 3
 
 
@@ -175,4 +194,18 @@ def test_get_hrv_trend(monkeypatch, tmp_path):
     _seed(monkeypatch, tmp_path, nights)
     out = server.get_hrv_trend(days=30)
     assert out["baseline_ms"] == 50.0
+    assert out["baseline_nights"] == 2
+    assert out["baseline_includes_latest"] is True
     assert [p["night_date"] for p in out["series"]] == ["2026-06-01", "2026-06-02"]
+
+
+def test_discovery_aliases():
+    from starlette.testclient import TestClient
+
+    with TestClient(server.build_app()) as c:
+        assert c.get("/").status_code == 200
+        assert c.get("/").json() == {"status": "ok"}
+        r = c.get("/.well-known/oauth-protected-resource")
+        assert r.status_code == 200
+        assert r.json()["resource"].endswith("/mcp")
+        assert r.json()["authorization_servers"]

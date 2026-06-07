@@ -7,6 +7,12 @@ dependencies = [
     "fastmcp>=2.0",
     "duckdb>=0.10",
     "uvicorn>=0.30",
+    # DuckDB materializes TIMESTAMPTZ columns (bed_time/wake_time) into Python
+    # datetimes via pytz; required for the per-night read path. Same as backend.
+    "pytz>=2024.1",
+    # zoneinfo tz database for read-time localization of bed/wake times in minimal
+    # containers (no system tzdata). Stdlib zoneinfo falls back to this package.
+    "tzdata>=2024.1",
 ]
 
 [project.optional-dependencies]
