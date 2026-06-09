@@ -48,19 +48,21 @@ the API routes either. Auth differs by service:
   against the shared `mcp-auth` AS and present a bearer JWT, which sleep-mcp verifies
   with the shared `MCP_OAUTH_SIGNING_KEY`. Not the backend token. See `docs/MCP_AUTH.md`.
 
-## Monitoring dashboard — LAN-only, NOT public
+## Monitoring dashboard — LAN-only, fails closed
 
 The backend serves a read-only monitoring UI at `/dashboard` (+ its data feed
-`/dashboard/data`). These routes are **deliberately unauthenticated** and are meant
-to be reached **directly on the LAN** at `http://<backend-LAN-IP>:8000/dashboard`,
-bypassing Cloudflare and NPM entirely. They are read-only (SELECTs against
-`nightly_summary`); the single-writer rule and the `/ingest` bearer auth are
-unchanged.
+`/dashboard/data`). These routes are **unauthenticated** and meant to be reached
+**directly on the LAN** at `http://<backend-LAN-IP>:8000/dashboard`. They are read-only
+(SELECTs against `nightly_summary`); the single-writer rule and the `/ingest` bearer
+auth are unchanged.
 
-**They must NOT be exposed on the public hostname.** Because the public proxy host
-forwards `healthbridge.example.com` → backend `:8000`, `/dashboard*` would otherwise
-be world-reachable. Block it at NPM on that proxy host (see `deploy/NPM.md` →
-"Block the dashboard on the public host") so the only path to the UI is the LAN IP.
+They **fail closed** so this stays safe even though the repo is public and the proxy
+host forwards `healthbridge.example.com` → backend `:8000`: the app refuses any request
+carrying proxy forwarding headers (NPM stamps these on everything it proxies), and
+`:8000` is never internet-reachable, so the dashboard is served only to direct LAN hits.
+Knowing the route exists buys an attacker nothing — there is no security-by-obscurity
+here. As defense-in-depth, also block `^~ /dashboard` at NPM (see `deploy/NPM.md` →
+"The dashboard is LAN-only — and fails closed at the origin").
 
 ## Firewall
 

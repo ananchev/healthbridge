@@ -17,7 +17,7 @@ from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
 
-from fastapi import FastAPI, Header, Query, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 
 from . import auth, dashboard, db, hae_adapter
@@ -26,6 +26,13 @@ from .models import IngestData, IngestPayload, IngestResult
 
 DB_PATH = os.environ.get("HEALTHBRIDGE_DB", "/data/health.duckdb")
 STATIC_DIR = Path(__file__).parent / "static"
+# The dashboard is LAN-only and UNAUTHENTICATED. It is served only to requests that
+# reach the app directly on the LAN (IP:8000). Set to "1" ONLY if you intend to expose
+# it publicly behind your own auth — otherwise leave it off so it stays LAN-only.
+DASHBOARD_PUBLIC = os.environ.get("HEALTHBRIDGE_DASHBOARD_PUBLIC") == "1"
+# Proxy forwarding headers. Their presence means the request came THROUGH NPM (i.e. from
+# the public internet); a direct LAN hit to :8000 carries none of these.
+_FORWARDED_HEADERS = ("x-forwarded-for", "x-forwarded-host", "x-real-ip", "forwarded")
 APP_ENV = os.environ.get("APP_ENV", "prod")
 # Sleep source to keep (Apple Watch). Matching is NBSP-insensitive (see hae_adapter).
 # Configurable per CLAUDE.md constraint #3 — never hardcoded. None = keep all sources.
@@ -158,16 +165,32 @@ def ingest_hae(
 
 
 # ── Monitoring dashboard (LAN-only, UNAUTHENTICATED) ──────────────────────────
-# These two routes are deliberately open: the dashboard is reached directly on the
-# LAN (IP:8000/dashboard) and MUST NOT be exposed on the public hostname — NPM blocks
-# /dashboard* on the public proxy host (see deploy/NETWORKING.md). They are READ-ONLY
-# (SELECTs only); the single-writer rule is unaffected. The /ingest auth surface is
-# untouched.
+# These two routes are deliberately open BUT fail closed: `_require_lan` refuses any
+# request that arrives through the proxy (i.e. from the public internet), so the
+# dashboard is reachable ONLY by hitting the app directly on the LAN (IP:8000). Safety
+# therefore does NOT depend on the NPM deny rule (that stays as defense-in-depth) or on
+# this repo being private — an attacker who knows /dashboard exists still cannot reach
+# it from the internet. The routes are READ-ONLY (SELECTs only); the single-writer rule
+# and the /ingest auth surface are untouched. See deploy/NETWORKING.md.
+
+
+def _require_lan(request: Request) -> None:
+    """Fail closed: serve the dashboard only to direct LAN requests.
+
+    NPM stamps forwarding headers on everything it proxies, and :8000 is never
+    internet-reachable, so a request carrying any forwarding header came from the
+    public side and is refused with 404 (don't even confirm the route exists).
+    `HEALTHBRIDGE_DASHBOARD_PUBLIC=1` opts out (only if fronted by your own auth).
+    """
+    if DASHBOARD_PUBLIC:
+        return
+    if any(h in request.headers for h in _FORWARDED_HEADERS):
+        raise HTTPException(status_code=404)
 
 
 @app.get("/dashboard")
-def dashboard_page() -> FileResponse:
-    """Serve the self-contained monitoring UI."""
+def dashboard_page(_: None = Depends(_require_lan)) -> FileResponse:
+    """Serve the self-contained monitoring UI (LAN-only)."""
     return FileResponse(STATIC_DIR / "index.html", media_type="text/html")
 
 
@@ -175,8 +198,9 @@ def dashboard_page() -> FileResponse:
 def dashboard_data(
     window: int = Query(default=7),
     end: date | None = Query(default=None),
+    _: None = Depends(_require_lan),
 ) -> dict:
-    """Windowed nightly parameters + registry + per-metric trends for the UI."""
+    """Windowed nightly parameters + registry + per-metric trends for the UI (LAN-only)."""
     conn = db.connect(DB_PATH)
     try:
         result = dashboard.fetch_window(conn, end, window)

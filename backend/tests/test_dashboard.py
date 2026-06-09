@@ -268,6 +268,30 @@ def test_dashboard_data_window_param(client):
     assert resp.json()["window"] == 14
 
 
+def test_dashboard_blocked_when_proxied(client):
+    """Fail closed: a request carrying proxy forwarding headers (i.e. from the public
+    internet via NPM) is refused, regardless of the proxy's own deny rule."""
+    for header in ("X-Forwarded-For", "X-Forwarded-Host", "X-Real-IP", "Forwarded"):
+        page = client.get("/dashboard", headers={header: "203.0.113.7"})
+        data = client.get("/dashboard/data", headers={header: "203.0.113.7"})
+        assert page.status_code == 404, header
+        assert data.status_code == 404, header
+
+
+def test_dashboard_data_proxied_does_not_leak(client):
+    """The 404 must be a generic Not Found, not nightly data."""
+    resp = client.get("/dashboard/data", headers={"X-Forwarded-For": "203.0.113.7"})
+    assert resp.status_code == 404
+    assert "nights" not in resp.json()
+
+
+def test_dashboard_public_opt_in_allows_proxied(client, monkeypatch):
+    """HEALTHBRIDGE_DASHBOARD_PUBLIC=1 opts out of the LAN-only guard."""
+    monkeypatch.setattr(app_module, "DASHBOARD_PUBLIC", True)
+    resp = client.get("/dashboard", headers={"X-Forwarded-For": "203.0.113.7"})
+    assert resp.status_code == 200
+
+
 def test_ingest_still_requires_auth(client):
     """Adding an open dashboard must NOT loosen the write/auth surface."""
     payload = {

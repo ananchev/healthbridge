@@ -65,24 +65,45 @@ bind to one interface in compose: `"<LAN-IP>:8000:8000"`.
 router's forward list — LAN-internal only. If a Docker host runs ufw/nftables, allow
 the NPM container's host to reach those ports.
 
-## Block the dashboard on the public host
+## The dashboard is LAN-only — and fails closed at the origin
 
-The backend serves a **LAN-only** monitoring UI at `/dashboard` and `/dashboard/data`
-(unauthenticated by design — see `deploy/NETWORKING.md`). You reach it directly on the
-LAN at `http://<backend-LAN-IP>:8000/dashboard`. Since the `healthbridge.example.com`
-proxy host forwards to backend `:8000`, you must stop those paths from being served
-publicly. On that proxy host in NPM → **Advanced** tab, add a custom Nginx location:
+The backend serves a monitoring UI at `/dashboard` (+ `/dashboard/data`),
+unauthenticated by design — see `deploy/NETWORKING.md`. You reach it directly on the
+LAN at `http://<backend-LAN-IP>:8000/dashboard`.
+
+**Primary protection (no proxy config needed):** the app **fails closed**. Those routes
+refuse any request that carries proxy forwarding headers (`X-Forwarded-For`, etc.),
+which NPM stamps on everything it proxies. Since `:8000` is never internet-reachable,
+the only way in from the internet is through NPM — and those requests are rejected with
+`404` at the origin (`backend/healthbridge/app.py::_require_lan`). Security does **not**
+rely on this repo being private or on the NPM rule below: an attacker who reads this doc
+and knows `/dashboard` exists still cannot reach it from the internet.
+
+**Defense-in-depth (recommended anyway):** also block it at NPM so the request never
+reaches the app. On the `healthbridge.example.com` proxy host → **Advanced** tab:
 
 ```nginx
-location /dashboard {
-    return 403;
+location ^~ /dashboard {
+    return 404;
 }
 ```
 
-(`location /dashboard` also covers `/dashboard/data` via prefix match.) This keeps the
-public surface to exactly the ingest/health/stats routes; the dashboard is reachable
-only from the LAN. Don't add this block on the laptop's local uvicorn — only on the
-public NPM proxy host. The `/ingest` bearer-auth surface is untouched.
+Notes:
+- `^~` makes this prefix win over any regex `location` (a plain `location /dashboard`
+  can be bypassed if a regex location also matches — regex outranks plain prefixes).
+- `return 404` (not 403) avoids confirming the route exists.
+- This covers `/dashboard/data` too (prefix match). Don't add it to the laptop's local
+  uvicorn — only the public NPM proxy host.
+
+**Verify from outside the LAN** (expect `404` for both):
+
+```sh
+curl -so /dev/null -w '%{http_code}\n' https://healthbridge.example.com/dashboard
+curl -so /dev/null -w '%{http_code}\n' https://healthbridge.example.com/dashboard/data
+```
+
+The `/ingest` bearer-auth surface is untouched. (Only set `HEALTHBRIDGE_DASHBOARD_PUBLIC=1`
+if you deliberately front the dashboard with your own auth.)
 
 ## Dev flips
 

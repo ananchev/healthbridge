@@ -52,6 +52,14 @@ Internet
 - **Server banner stripped** (`--no-server-header`); Cloudflare masks it at the edge
   regardless.
 - **No CORS**: there is no browser client, so cross-origin access stays disabled.
+- **LAN-only dashboard, fail-closed**: `/dashboard` (+ `/dashboard/data`) is an
+  unauthenticated read-only monitoring UI. `_require_lan` serves it ONLY to direct LAN
+  requests — anything carrying proxy forwarding headers (`X-Forwarded-For` etc., stamped
+  by NPM on all proxied traffic) gets 404. Since `:8000` is never internet-reachable,
+  the public side can't reach it regardless of the NPM rule or this repo being public
+  (no security-by-obscurity). `HEALTHBRIDGE_DASHBOARD_PUBLIC=1` disables the guard —
+  set it ONLY if you front the dashboard with your own auth. NPM also blocks
+  `^~ /dashboard` (return 404) as defense-in-depth. See `deploy/NPM.md`.
 - **Single writer / read-only readers**: only `backend/` opens the DB read-write; MCP
   and the coach open it `read_only=True`.
 
