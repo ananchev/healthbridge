@@ -48,6 +48,20 @@ the API routes either. Auth differs by service:
   against the shared `mcp-auth` AS and present a bearer JWT, which sleep-mcp verifies
   with the shared `MCP_OAUTH_SIGNING_KEY`. Not the backend token. See `docs/MCP_AUTH.md`.
 
+## Monitoring dashboard — LAN-only, NOT public
+
+The backend serves a read-only monitoring UI at `/dashboard` (+ its data feed
+`/dashboard/data`). These routes are **deliberately unauthenticated** and are meant
+to be reached **directly on the LAN** at `http://<backend-LAN-IP>:8000/dashboard`,
+bypassing Cloudflare and NPM entirely. They are read-only (SELECTs against
+`nightly_summary`); the single-writer rule and the `/ingest` bearer auth are
+unchanged.
+
+**They must NOT be exposed on the public hostname.** Because the public proxy host
+forwards `healthbridge.example.com` → backend `:8000`, `/dashboard*` would otherwise
+be world-reachable. Block it at NPM on that proxy host (see `deploy/NPM.md` →
+"Block the dashboard on the public host") so the only path to the UI is the LAN IP.
+
 ## Firewall
 
 - Only the router's :443 → NPM forward is public.

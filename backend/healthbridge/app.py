@@ -15,15 +15,17 @@ from __future__ import annotations
 import os
 from contextlib import asynccontextmanager
 from datetime import date
+from pathlib import Path
 
-from fastapi import FastAPI, Header, Request
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, Header, Query, Request
+from fastapi.responses import FileResponse, JSONResponse
 
-from . import auth, db, hae_adapter
+from . import auth, dashboard, db, hae_adapter
 from .hae_adapter import HAEPayload
 from .models import IngestData, IngestPayload, IngestResult
 
 DB_PATH = os.environ.get("HEALTHBRIDGE_DB", "/data/health.duckdb")
+STATIC_DIR = Path(__file__).parent / "static"
 APP_ENV = os.environ.get("APP_ENV", "prod")
 # Sleep source to keep (Apple Watch). Matching is NBSP-insensitive (see hae_adapter).
 # Configurable per CLAUDE.md constraint #3 — never hardcoded. None = keep all sources.
@@ -153,6 +155,39 @@ def ingest_hae(
     auth.verify_bearer(authorization)
     data = hae_adapter.normalize(payload, sleep_source=SLEEP_SOURCE)
     return _persist(data)
+
+
+# ── Monitoring dashboard (LAN-only, UNAUTHENTICATED) ──────────────────────────
+# These two routes are deliberately open: the dashboard is reached directly on the
+# LAN (IP:8000/dashboard) and MUST NOT be exposed on the public hostname — NPM blocks
+# /dashboard* on the public proxy host (see deploy/NETWORKING.md). They are READ-ONLY
+# (SELECTs only); the single-writer rule is unaffected. The /ingest auth surface is
+# untouched.
+
+
+@app.get("/dashboard")
+def dashboard_page() -> FileResponse:
+    """Serve the self-contained monitoring UI."""
+    return FileResponse(STATIC_DIR / "index.html", media_type="text/html")
+
+
+@app.get("/dashboard/data")
+def dashboard_data(
+    window: int = Query(default=7),
+    end: date | None = Query(default=None),
+) -> dict:
+    """Windowed nightly parameters + registry + per-metric trends for the UI."""
+    conn = db.connect(DB_PATH)
+    try:
+        result = dashboard.fetch_window(conn, end, window)
+    finally:
+        conn.close()
+    return {
+        **result,
+        "metrics": dashboard.metrics_as_dicts(),
+        "trends": dashboard.compute_trends(result["nights"]),
+        "window_avg": dashboard.window_averages(result["nights"]),
+    }
 
 
 @app.get("/stats")

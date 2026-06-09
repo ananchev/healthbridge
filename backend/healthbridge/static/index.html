@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>HealthBridge — Monitor</title>
+<style>
+  :root {
+    --bg: #0f1216; --panel: #161b22; --line: #2a313c; --text: #e6edf3;
+    --muted: #8b949e; --accent: #58a6ff;
+    --good: #3fb950; --bad: #f85149; --neutral: #8b949e;
+    --band-sleep: #1f2a3a; --band-recovery: #2a2233;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 1400px; margin: 0 auto; padding: 24px 20px 48px; }
+  header.top { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  h1 { font-size: 20px; margin: 0; font-weight: 650; }
+  .sub { color: var(--muted); font-size: 13px; }
+  .controls {
+    display: flex; align-items: center; gap: 8px; margin: 18px 0 14px; flex-wrap: wrap;
+  }
+  button, select {
+    background: var(--panel); color: var(--text); border: 1px solid var(--line);
+    border-radius: 7px; padding: 7px 12px; font-size: 13px; cursor: pointer;
+  }
+  button:hover:not(:disabled), select:hover { border-color: var(--accent); }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  .spacer { flex: 1; }
+  .tablewrap {
+    overflow-x: auto; border: 1px solid var(--line); border-radius: 10px;
+    background: var(--panel);
+  }
+  table { border-collapse: collapse; width: 100%; white-space: nowrap; }
+  th, td { padding: 9px 12px; text-align: right; border-bottom: 1px solid var(--line); }
+  th:first-child, td:first-child {
+    text-align: left; position: sticky; left: 0; background: var(--panel);
+  }
+  thead .band th {
+    text-align: center; font-size: 11px; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--muted); border-bottom: 1px solid var(--line); padding: 7px 12px;
+  }
+  thead .band th.g-Sleep { background: var(--band-sleep); }
+  thead .band th.g-Recovery { background: var(--band-recovery); }
+  thead .cols th { font-weight: 600; vertical-align: bottom; }
+  tbody tr:hover td { background: #1b2230; }
+  tbody tr:hover td:first-child { background: #1b2230; }
+  td.val { font-variant-numeric: tabular-nums; }
+  td.null { color: var(--muted); }
+  .info {
+    display: inline-block; width: 16px; height: 16px; line-height: 16px; text-align: center;
+    border-radius: 50%; border: 1px solid var(--line); color: var(--muted);
+    font-size: 11px; margin-left: 5px; cursor: help; user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .info:hover, .info.on { border-color: var(--accent); color: var(--accent); }
+  .tip {
+    position: absolute; display: none; z-index: 50; max-width: 280px;
+    background: #0b0f14; color: var(--text); border: 1px solid var(--line);
+    border-radius: 8px; padding: 9px 11px; font-size: 12px; line-height: 1.4;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, .45); white-space: normal; text-align: left;
+    font-weight: 400; text-transform: none; letter-spacing: 0;
+  }
+  .tip-row { margin-top: 7px; padding-top: 7px; border-top: 1px solid var(--line); }
+  .tip-k {
+    display: block; color: var(--muted); font-size: 10px; letter-spacing: .05em;
+    text-transform: uppercase; margin-bottom: 1px;
+  }
+  .trend { margin-left: 6px; font-size: 12px; }
+  .t-good { color: var(--good); } .t-bad { color: var(--bad); } .t-neutral { color: var(--neutral); }
+  .note { color: var(--muted); font-size: 12px; margin-top: 12px; }
+  .empty { padding: 40px; text-align: center; color: var(--muted); }
+  .date { color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <h1>HealthBridge</h1>
+    <span class="sub" id="range">loading…</span>
+  </header>
+
+  <div class="controls">
+    <button id="earlier">← Earlier</button>
+    <button id="later">Later →</button>
+    <span class="spacer"></span>
+    <label class="sub" for="window">Window</label>
+    <select id="window">
+      <option value="7">7 nights</option>
+      <option value="14">14 nights</option>
+      <option value="30">30 nights</option>
+    </select>
+    <button id="latest">Jump to latest</button>
+  </div>
+
+  <div class="tablewrap"><table id="grid"></table></div>
+  <div id="tip" class="tip" role="tooltip"></div>
+  <p class="note">
+    Nights run noon-to-noon (local). <strong>Window average</strong> = the average across the
+    nights currently in view; the trend arrow compares the most recent night against that
+    window (▲ up · ▼ down · – flat; green = favourable, red = unfavourable). Tap or hover the
+    ⓘ for what each parameter means, its window average, and a typical reference range.
+    Typical ranges are general adult references — individual, age and sex variation applies —
+    and are not medical advice.
+  </p>
+</div>
+
+<script>
+// ── State ────────────────────────────────────────────────────────────────────
+let state = { end: null, window: 7 };
+
+const qs = (s) => document.querySelector(s);
+const escAttr = (s) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+const escHtml = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+function fmtValue(metric, v) {
+  if (v === null || v === undefined) return "–";
+  switch (metric.format) {
+    case "duration": {
+      const s = Math.round(v);
+      return `${Math.floor(s / 3600)}h${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}m`;
+    }
+    case "percent": return `${Math.round(v)}%`;
+    case "number": {
+      const n = Math.round(v * 10) / 10;
+      return metric.unit ? `${n} ${metric.unit}` : `${n}`;
+    }
+    case "clock": return v; // already "HH:MM"
+    default: return String(v);
+  }
+}
+
+function trendGlyph(t) {
+  if (!t) return "";
+  const dir = t.direction === "up" ? "▲" : t.direction === "down" ? "▼" : "–";
+  return `<span class="trend t-${t.sentiment}" title="${t.direction}">${dir}</span>`;
+}
+
+function groupsOf(metrics) {
+  const out = [];
+  for (const m of metrics) {
+    const last = out[out.length - 1];
+    if (last && last.name === m.group) last.count++;
+    else out.push({ name: m.group, count: 1 });
+  }
+  return out;
+}
+
+function render(data) {
+  const { metrics, nights, trends } = data;
+  qs("#earlier").disabled = !data.prev_end;
+  qs("#later").disabled = !data.next_end;
+  qs("#range").textContent = nights.length
+    ? `${nights[nights.length - 1].night_date} → ${nights[0].night_date} · ${nights.length} nights`
+    : "no data";
+
+  const table = qs("#grid");
+  if (!nights.length) {
+    table.innerHTML = `<tbody><tr><td class="empty">No nights in this range.</td></tr></tbody>`;
+    return;
+  }
+
+  // Header band (groups) + column header (label, ⓘ tooltip, trend)
+  const bands = groupsOf(metrics)
+    .map((g) => `<th class="g-${g.name}" colspan="${g.count}">${g.name}</th>`).join("");
+  const wavg = data.window_avg || {};
+  const cols = metrics.map((m) => {
+    const t = m.trend !== "neutral" ? trendGlyph(trends[m.key]) : "";
+    // The ⓘ popover carries: meaning (data-tip), this window's average (data-avg,
+    // skipped for clock fields), and a generic typical range (data-ref).
+    const avg = m.format !== "clock" && wavg[m.key] != null ? fmtValue(m, wavg[m.key]) : "";
+    const attrs =
+      `data-tip="${escAttr(m.tooltip)}"` +
+      (avg ? ` data-avg="${escAttr(avg)}"` : "") +
+      (m.reference ? ` data-ref="${escAttr(m.reference)}"` : "");
+    return `<th>${m.label}<span class="info" tabindex="0" ${attrs}>i</span>${t}</th>`;
+  }).join("");
+
+  const body = nights.map((n) => {
+    const cells = metrics.map((m) => {
+      const v = n.values[m.key];
+      const cls = v === null || v === undefined ? "val null" : "val";
+      return `<td class="${cls}">${fmtValue(m, v)}</td>`;
+    }).join("");
+    return `<tr><td class="date">${n.night_date}</td>${cells}</tr>`;
+  }).join("");
+
+  table.innerHTML =
+    `<thead>` +
+    `<tr class="band"><th></th>${bands}</tr>` +
+    `<tr class="cols"><th>Night</th>${cols}</tr>` +
+    `</thead><tbody>${body}</tbody>`;
+}
+
+async function load() {
+  const p = new URLSearchParams({ window: state.window });
+  if (state.end) p.set("end", state.end);
+  const res = await fetch(`/dashboard/data?${p}`);
+  if (!res.ok) { qs("#grid").innerHTML = `<tbody><tr><td class="empty">Failed to load (${res.status}).</td></tr></tbody>`; return; }
+  const data = await res.json();
+  state.lastPrev = data.prev_end;
+  state.lastNext = data.next_end;
+  render(data);
+}
+
+// ── Tooltips (tap-to-toggle on touch, hover on desktop) ──────────────────────
+const tip = qs("#tip");
+let pinnedInfo = null; // the ⓘ whose tip is "pinned" open by a tap/click
+
+function showTip(info) {
+  const parts = [`<div>${escHtml(info.dataset.tip)}</div>`];
+  if (info.dataset.avg)
+    parts.push(`<div class="tip-row"><span class="tip-k">In view (avg)</span>${escHtml(info.dataset.avg)}</div>`);
+  if (info.dataset.ref)
+    parts.push(`<div class="tip-row"><span class="tip-k">Typical</span>${escHtml(info.dataset.ref)}</div>`);
+  tip.innerHTML = parts.join("");
+  tip.style.display = "block";
+  info.classList.add("on");
+  const r = info.getBoundingClientRect();
+  const margin = 8;
+  let left = r.left + window.scrollX;
+  // clamp within the viewport so edge columns (RHR) stay readable
+  const maxLeft = window.scrollX + document.documentElement.clientWidth - tip.offsetWidth - margin;
+  left = Math.max(window.scrollX + margin, Math.min(left, maxLeft));
+  tip.style.left = `${left}px`;
+  tip.style.top = `${r.bottom + window.scrollY + 6}px`;
+}
+
+function hideTip() {
+  tip.style.display = "none";
+  if (pinnedInfo) pinnedInfo.classList.remove("on");
+  document.querySelectorAll(".info.on").forEach((e) => e.classList.remove("on"));
+  pinnedInfo = null;
+}
+
+document.addEventListener("click", (e) => {
+  const info = e.target.closest(".info");
+  if (info) {
+    e.stopPropagation();
+    if (pinnedInfo === info) hideTip();
+    else { hideTip(); pinnedInfo = info; showTip(info); }
+  } else if (pinnedInfo) {
+    hideTip();
+  }
+});
+// Desktop convenience: hover shows, leave hides — but never fight a pinned tip.
+document.addEventListener("mouseover", (e) => {
+  const info = e.target.closest(".info");
+  if (info && !pinnedInfo) showTip(info);
+});
+document.addEventListener("mouseout", (e) => {
+  const info = e.target.closest(".info");
+  if (info && !pinnedInfo) hideTip();
+});
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideTip(); });
+window.addEventListener("scroll", () => { if (pinnedInfo) hideTip(); }, { passive: true });
+
+// ── Controls ─────────────────────────────────────────────────────────────────
+qs("#earlier").addEventListener("click", () => { if (state.lastPrev) { state.end = state.lastPrev; load(); } });
+qs("#later").addEventListener("click", () => { if (state.lastNext) { state.end = state.lastNext; load(); } });
+qs("#latest").addEventListener("click", () => { state.end = null; load(); });
+qs("#window").addEventListener("change", (e) => { state.window = parseInt(e.target.value, 10); load(); });
+
+load();
+</script>
+</body>
+</html>

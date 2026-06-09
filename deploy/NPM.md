@@ -65,6 +65,25 @@ bind to one interface in compose: `"<LAN-IP>:8000:8000"`.
 router's forward list — LAN-internal only. If a Docker host runs ufw/nftables, allow
 the NPM container's host to reach those ports.
 
+## Block the dashboard on the public host
+
+The backend serves a **LAN-only** monitoring UI at `/dashboard` and `/dashboard/data`
+(unauthenticated by design — see `deploy/NETWORKING.md`). You reach it directly on the
+LAN at `http://<backend-LAN-IP>:8000/dashboard`. Since the `healthbridge.example.com`
+proxy host forwards to backend `:8000`, you must stop those paths from being served
+publicly. On that proxy host in NPM → **Advanced** tab, add a custom Nginx location:
+
+```nginx
+location /dashboard {
+    return 403;
+}
+```
+
+(`location /dashboard` also covers `/dashboard/data` via prefix match.) This keeps the
+public surface to exactly the ingest/health/stats routes; the dashboard is reachable
+only from the LAN. Don't add this block on the laptop's local uvicorn — only on the
+public NPM proxy host. The `/ingest` bearer-auth surface is untouched.
+
 ## Dev flips
 
 `scripts/dev/npm-flip.sh` talks to the NPM API to swap these proxies' upstreams
