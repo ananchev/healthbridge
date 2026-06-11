@@ -41,9 +41,16 @@ In the HAE app's Auto Export screen:
 4. **Destination: REST API**
    - URL: `https://healthbridge.example.com/ingest/hae`
    - Method: POST, Format: JSON
-   - Headers: `Authorization,Bearer <HEALTHBRIDGE_TOKEN>`
-     (HAE takes headers as comma-separated key,value pairs; `Content-Type` is added
-     automatically.)
+   - Headers: tap **Add Headers** and fill the two fields separately —
+     **Key** = `Authorization`, **Value** = `Bearer <HEALTHBRIDGE_TOKEN>`
+     (the word `Bearer`, one space, then the token — all in the Value field).
+     Do NOT put `Bearer` in the Key field; the Key is just `Authorization`.
+     `Content-Type` is added automatically.
+
+     | Field | Value |
+     |-------|-------|
+     | Key   | `Authorization` |
+     | Value | `Bearer <HEALTHBRIDGE_TOKEN>` |
 5. Dev: trigger a **manual** export. Prod: enable the scheduled/automatic export
    (Premium).
 
