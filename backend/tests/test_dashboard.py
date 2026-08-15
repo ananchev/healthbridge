@@ -83,6 +83,11 @@ def test_registry_numeric_columns_exist_in_schema(conn):
         assert m.key in cols, f"{m.key} is not a nightly_summary column"
 
 
+def test_registry_exposes_nap_time():
+    """Naps are excluded from the night's numbers, so the UI must show them."""
+    assert "nap_seconds" in {m.key for m in dashboard.METRICS}
+
+
 def test_metrics_as_dicts_shape():
     dicts = dashboard.metrics_as_dicts()
     assert dicts[0].keys() >= {"key", "label", "group", "unit", "format", "trend", "tooltip"}

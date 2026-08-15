@@ -82,8 +82,17 @@ _NIGHT_COLS = (
     "efficiency_pct",
     "hrv_avg_ms",
     "rhr_bpm",
+    # Sleep outside the night (naps). The night columns above deliberately
+    # exclude it: it belongs in the daily total, not in efficiency or stages.
+    "nap_seconds",
+    "nap_count",
+    "total_asleep_seconds",
 )
 _NIGHT_SELECT = f"SELECT {', '.join(_NIGHT_COLS)} FROM nightly_summary"
+
+# Total sleep in 24 h. Rows computed before naps were tracked have NULL here —
+# fall back to the night so they read as their night's sleep, never as zero.
+_TOTAL_ASLEEP = "COALESCE(total_asleep_seconds, asleep_seconds)"
 
 
 def _fmt_hms(seconds: int | None) -> str | None:
@@ -99,6 +108,9 @@ def _round(v, n=1):
 
 def _night_to_dict(row: tuple) -> dict:
     d = dict(zip(_NIGHT_COLS, row, strict=True))
+    total_asleep = d["total_asleep_seconds"]
+    if total_asleep is None:  # pre-backfill row: the night is all we know about
+        total_asleep = d["asleep_seconds"]
     return {
         "night_date": str(d["night_date"]),
         # Localized to LOCAL_TZ for human reading (stored UTC, converted at read time).
@@ -115,6 +127,11 @@ def _night_to_dict(row: tuple) -> dict:
         "efficiency_pct": _round(d["efficiency_pct"]),
         "hrv_avg_ms": _round(d["hrv_avg_ms"]),
         "rhr_bpm": _round(d["rhr_bpm"]),
+        "nap_seconds": d["nap_seconds"],
+        "nap": _fmt_hms(d["nap_seconds"]),
+        "nap_count": d["nap_count"],
+        "total_asleep_seconds": total_asleep,
+        "total_asleep": _fmt_hms(total_asleep),
     }
 
 
@@ -182,6 +199,10 @@ def get_hrv_trend(days: int = 30) -> dict:
 def get_sleep_debt(window_days: int = 7, target_hours: float = SLEEP_TARGET_HOURS) -> dict:
     """Return accumulated sleep deficit vs target over the most recent window.
 
+    Counts ALL sleep in the 24 h, naps included — a 6 h night plus a 1 h nap is
+    7 h of sleep against the target. `nap_hours` is reported per night so a day
+    that only reached target via a nap stays visible rather than hidden.
+
     Two figures, because oversleep is treated differently:
       - debt_hours: sum of per-night shortfalls, with surplus nights floored at 0
         (oversleep gives NO credit). This is the recovery-relevant number.
@@ -191,8 +212,8 @@ def get_sleep_debt(window_days: int = 7, target_hours: float = SLEEP_TARGET_HOUR
     conn = _ro_conn()
     try:
         rows = conn.execute(
-            "SELECT night_date, asleep_seconds FROM nightly_summary "
-            "ORDER BY night_date DESC LIMIT ?",
+            f"SELECT night_date, {_TOTAL_ASLEEP}, COALESCE(nap_seconds, 0) "
+            "FROM nightly_summary ORDER BY night_date DESC LIMIT ?",
             [window_days],
         ).fetchall()
     finally:
@@ -200,11 +221,17 @@ def get_sleep_debt(window_days: int = 7, target_hours: float = SLEEP_TARGET_HOUR
     per_night = []
     debt = 0.0
     total = 0.0
-    for d, asleep in reversed(rows):
+    for d, asleep, nap in reversed(rows):
         hours = (asleep or 0) / 3600
         total += hours
         debt += max(0.0, target_hours - hours)
-        per_night.append({"night_date": str(d), "asleep_hours": round(hours, 2)})
+        per_night.append(
+            {
+                "night_date": str(d),
+                "asleep_hours": round(hours, 2),
+                "nap_hours": round((nap or 0) / 3600, 2),
+            }
+        )
     return {
         "window_days": window_days,
         "target_hours": target_hours,
@@ -227,7 +254,7 @@ def get_recovery_status() -> dict:
     conn = _ro_conn()
     try:
         rows = conn.execute(
-            "SELECT night_date, asleep_seconds, hrv_avg_ms, rhr_bpm FROM nightly_summary "
+            f"SELECT night_date, {_TOTAL_ASLEEP}, hrv_avg_ms, rhr_bpm FROM nightly_summary "
             "ORDER BY night_date DESC LIMIT ?",
             [BASELINE_DAYS + 1],
         ).fetchall()

@@ -91,6 +91,18 @@ METRICS: list[Metric] = [
         reference="Adults: 7–9 h asleep (National Sleep Foundation).",
     ),
     Metric(
+        "nap_seconds",
+        "Naps",
+        "Sleep",
+        "",
+        "duration",
+        "neutral",
+        "Sleep outside the night (daytime or evening naps), kept separate so it "
+        "cannot distort the night's efficiency or stage breakdown.",
+        reference="Counts toward your daily sleep total; short early-afternoon naps "
+        "are least likely to push back the following night.",
+    ),
+    Metric(
         "efficiency_pct",
         "Efficiency",
         "Sleep",

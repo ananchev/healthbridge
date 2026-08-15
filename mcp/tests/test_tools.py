@@ -29,8 +29,9 @@ def _make_db(tmp_path, nights):
             """INSERT INTO nightly_summary
                (night_date, bed_time, wake_time, time_in_bed_seconds, asleep_seconds,
                 rem_seconds, deep_seconds, core_seconds, awake_seconds,
-                efficiency_pct, hrv_avg_ms, rhr_bpm)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                efficiency_pct, hrv_avg_ms, rhr_bpm,
+                nap_seconds, nap_count, total_asleep_seconds)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             [
                 n["night_date"],
                 n.get("bed_time"),
@@ -44,6 +45,11 @@ def _make_db(tmp_path, nights):
                 n.get("efficiency_pct"),
                 n.get("hrv_avg_ms"),
                 n.get("rhr_bpm"),
+                # Left NULL by default: rows written before the nap columns
+                # existed look exactly like this until the backfill runs.
+                n.get("nap_seconds"),
+                n.get("nap_count"),
+                n.get("total_asleep_seconds"),
             ],
         )
     conn.close()
@@ -184,6 +190,89 @@ def test_get_sleep_debt_cumulative_vs_net(monkeypatch, tmp_path):
     assert out["debt_hours"] == 4.0
     assert out["net_debt_hours"] == 2.0
     assert out["nights_counted"] == 3
+
+
+def test_night_reports_nap_fields(monkeypatch, tmp_path):
+    """Naps ride alongside the night, never folded into it."""
+    _seed(
+        monkeypatch,
+        tmp_path,
+        [
+            {
+                "night_date": date(2026, 6, 2),
+                "asleep_seconds": 6 * 3600,
+                "nap_seconds": 3600,
+                "nap_count": 1,
+                "total_asleep_seconds": 7 * 3600,
+            }
+        ],
+    )
+    out = server.get_latest_night()
+    assert out["asleep_seconds"] == 6 * 3600  # the night alone
+    assert out["nap_seconds"] == 3600
+    assert out["nap_count"] == 1
+    assert out["total_asleep_seconds"] == 7 * 3600
+    assert out["total_asleep"] == "7h00m"
+
+
+def test_sleep_debt_counts_nap_sleep(monkeypatch, tmp_path):
+    """A 6 h night plus a 1 h nap is 7 h of sleep, not 6."""
+    nights = [
+        {
+            "night_date": date(2026, 6, 1),
+            "asleep_seconds": 6 * 3600,
+            "nap_seconds": 3600,
+            "nap_count": 1,
+            "total_asleep_seconds": 7 * 3600,
+        },
+    ]
+    _seed(monkeypatch, tmp_path, nights)
+    out = server.get_sleep_debt(window_days=7, target_hours=8.0)
+    assert out["debt_hours"] == 1.0
+    assert out["per_night"][0]["asleep_hours"] == 7.0
+    assert out["per_night"][0]["nap_hours"] == 1.0
+
+
+def test_sleep_debt_falls_back_when_total_missing(monkeypatch, tmp_path):
+    """Rows written before the backfill have NULL totals — read the night, not 0.
+
+    Treating NULL as zero would invent a full night of debt per un-backfilled row.
+    """
+    nights = [{"night_date": date(2026, 6, 1), "asleep_seconds": 6 * 3600}]
+    _seed(monkeypatch, tmp_path, nights)
+    out = server.get_sleep_debt(window_days=7, target_hours=8.0)
+    assert out["debt_hours"] == 2.0
+    assert out["per_night"][0]["asleep_hours"] == 6.0
+
+
+def test_recovery_status_counts_nap_sleep(monkeypatch, tmp_path):
+    """Sleep debt inside the recovery signal uses the same 24 h total."""
+    latest = date(2026, 6, 30)
+    nights = _baseline_nights(14, latest, asleep_h=4.0) + [
+        {
+            "night_date": latest,
+            "asleep_seconds": 4 * 3600,
+            "nap_seconds": 4 * 3600,
+            "nap_count": 1,
+            "total_asleep_seconds": 8 * 3600,
+            "hrv_avg_ms": 50.0,
+            "rhr_bpm": 55.0,
+        }
+    ]
+    naps_dir = tmp_path / "naps"
+    naps_dir.mkdir()
+    monkeypatch.setattr(server, "DB_PATH", _make_db(naps_dir, nights))
+    debt_with_naps = server.get_recovery_status()["metrics"]["sleep_debt_hours"]
+
+    nights_no_naps = [
+        {**n, "nap_seconds": 0, "total_asleep_seconds": n["asleep_seconds"]} for n in nights
+    ]
+    plain_dir = tmp_path / "nonaps"
+    plain_dir.mkdir()
+    monkeypatch.setattr(server, "DB_PATH", _make_db(plain_dir, nights_no_naps))
+    debt_without = server.get_recovery_status()["metrics"]["sleep_debt_hours"]
+
+    assert debt_with_naps < debt_without
 
 
 def test_get_hrv_trend(monkeypatch, tmp_path):
