@@ -7,7 +7,7 @@ so assertions are exact.
 from __future__ import annotations
 
 import tempfile
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
@@ -171,6 +171,9 @@ def test_recompute_idempotent(conn):
     assert count == 1
 
 
+_ING = "2026-05-21T10:00:00Z"  # a single export time, for rows inserted raw
+
+
 def _insert_raw(conn, rows) -> None:
     """Insert sleep rows with an explicit ingested_at (which insert_sleep sets itself).
 
@@ -279,6 +282,61 @@ def test_stage_seconds_sum_to_time_in_bed(conn):
     # InBed spans 20:00-04:00 and encloses the staged samples; the 60 min it is
     # the only cover for (20:00-20:30, 03:30-04:00) is in-bed-but-unstaged time.
     assert tib == asleep + awake + 3600
+
+
+# A nap earlier in the same noon-to-noon window, well separated from the night.
+# Mirrors 2026-07-19: nap 14:38-16:04 local, then a 9 h gap, then real sleep.
+NAP_SAMPLES = [
+    SleepSample(
+        start="2026-05-20T13:00:00Z",
+        end="2026-05-20T14:00:00Z",
+        stage="AsleepUnspecified",
+        source=_SRC,
+    ),
+]
+
+
+def test_nap_does_not_stretch_the_night(conn):
+    """A daytime nap must not become the night's bed_time or inflate time in bed."""
+    _seed(conn)
+    db.insert_sleep(conn, NAP_SAMPLES)
+    db.recompute_nights(conn, {NIGHT})
+
+    bed, wake, tib, asleep, eff = conn.execute(
+        """SELECT bed_time, wake_time, time_in_bed_seconds, asleep_seconds, efficiency_pct
+           FROM nightly_summary WHERE night_date = ?""",
+        [NIGHT],
+    ).fetchone()
+
+    # Night starts at 20:00Z, not at the 13:00Z nap.
+    assert bed.astimezone(UTC) == datetime(2026, 5, 20, 20, 0, tzinfo=UTC)
+    assert wake.astimezone(UTC) == datetime(2026, 5, 21, 4, 0, tzinfo=UTC)
+    assert tib == 28800  # 8 h, not 15 h
+    assert asleep == 23400  # the nap's hour is not part of the night
+    assert eff == pytest.approx(81.25, abs=0.01)
+
+
+def test_night_is_the_episode_with_most_sleep(conn):
+    """A long restless nap must not be mistaken for the night."""
+    _insert_raw(
+        conn,
+        [
+            # Restless afternoon episode: 3 h span, only 1 h asleep.
+            ("2026-05-20T12:00:00Z", "2026-05-20T13:00:00Z", "AsleepUnspecified", _SRC, _ING),
+            ("2026-05-20T13:00:00Z", "2026-05-20T15:00:00Z", "Awake", _SRC, _ING),
+            # Compact night: 2 h span, all asleep.
+            ("2026-05-20T23:00:00Z", "2026-05-21T01:00:00Z", "AsleepCore", _SRC, _ING),
+        ],
+    )
+    db.recompute_nights(conn, {NIGHT})
+    bed, tib, asleep = conn.execute(
+        "SELECT bed_time, time_in_bed_seconds, asleep_seconds FROM nightly_summary "
+        "WHERE night_date = ?",
+        [NIGHT],
+    ).fetchone()
+    assert bed.astimezone(UTC) == datetime(2026, 5, 20, 23, 0, tzinfo=UTC)
+    assert tib == 7200
+    assert asleep == 7200
 
 
 def test_recompute_multiple_nights(conn):

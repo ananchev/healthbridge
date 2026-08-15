@@ -142,3 +142,76 @@ def test_flatten_leaves_gaps_between_episodes():
     flat = db.flatten_segments(rows)
     assert len(flat) == 2
     assert flat[1].start - flat[0].end == timedelta(hours=8)
+
+
+# --- Episode splitting -------------------------------------------------------
+#
+# A noon-to-noon window is not the same thing as a night: it can also contain
+# naps. Splitting on a gap is safe because the watch emits contiguous segments
+# (including Awake) while it is recording — across all real data the gap between
+# consecutive segments is either exactly 0 or larger than two hours, so any
+# threshold in that empty band gives the same answer.
+
+
+def test_split_episodes_single_contiguous_run():
+    segs = db.flatten_segments(
+        [
+            (_dt(22), _dt(23), "AsleepCore", ING_OLD),
+            (_dt(23), _dt(23, 30), "AsleepREM", ING_OLD),
+        ]
+    )
+    assert len(db.split_episodes(segs)) == 1
+
+
+def test_split_episodes_splits_on_long_gap():
+    segs = db.flatten_segments(
+        [
+            (_dt(14), _dt(15), "AsleepUnspecified", ING_OLD),  # nap
+            (_dt(23), _dt(23, 30), "AsleepCore", ING_OLD),  # night
+        ]
+    )
+    episodes = db.split_episodes(segs)
+    assert len(episodes) == 2
+    assert episodes[0][0].start == _dt(14)
+    assert episodes[1][0].start == _dt(23)
+
+
+def test_split_episodes_keeps_short_gap_together():
+    """A brief non-recording gap mid-night is still the same sleep opportunity."""
+    segs = db.flatten_segments(
+        [
+            (_dt(22), _dt(23), "AsleepCore", ING_OLD),
+            (_dt(23, 30), _dt(23, 45), "AsleepCore", ING_OLD),
+        ]
+    )
+    assert len(db.split_episodes(segs)) == 1
+
+
+def test_split_episodes_gap_threshold_is_exclusive():
+    """A gap exactly at the threshold stays one episode; one second more splits."""
+    segs = db.flatten_segments(
+        [
+            (_dt(22), _dt(23), "AsleepCore", ING_OLD),
+            (_dt(0, 0, day=21), _dt(0, 30, day=21), "AsleepCore", ING_OLD),
+        ]
+    )
+    assert len(db.split_episodes(segs, gap_seconds=3600)) == 1
+    assert len(db.split_episodes(segs, gap_seconds=3599)) == 2
+
+
+def test_split_episodes_empty():
+    assert db.split_episodes([]) == []
+
+
+def test_main_episode_is_the_one_with_most_sleep():
+    """Not the longest span: a restless 3 h nap must not outrank a solid night."""
+    nap = db.flatten_segments(
+        [
+            (_dt(13), _dt(14), "AsleepUnspecified", ING_OLD),
+            (_dt(14), _dt(16), "Awake", ING_OLD),
+        ]
+    )
+    night = db.flatten_segments([(_dt(23), _dt(1, day=21), "AsleepCore", ING_OLD)])
+    episodes = db.split_episodes(nap + night)
+    assert len(episodes) == 2
+    assert db.main_episode(episodes)[0].start == _dt(23)

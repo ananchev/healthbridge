@@ -29,6 +29,11 @@ from .models import ASLEEP_STAGES, HrvSample, RhrSample, SleepSample
 SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 LOCAL_TZ = ZoneInfo("Europe/Amsterdam")
 
+# Gap that separates one sleep episode (a night, a nap) from the next. See
+# split_episodes for why any value in the 5-120 min range gives the same answer
+# on real data.
+EPISODE_GAP_SECONDS = 3600
+
 # Stage specificity, used ONLY as a last-resort tiebreak when two samples cover
 # the same instant with the same ingest time and the same duration. Higher wins,
 # so a graded sleep stage beats generic "asleep", which beats the InBed container.
@@ -188,6 +193,55 @@ def asleep_seconds(segments: Iterable[Segment]) -> int:
     )
 
 
+# --- Episode splitting ------------------------------------------------------
+
+
+def split_episodes(
+    segments: list[Segment], *, gap_seconds: int = EPISODE_GAP_SECONDS
+) -> list[list[Segment]]:
+    """Split a flattened timeline into separate sleep episodes on long gaps.
+
+    A noon-to-noon window is a *window*, not a night: it can also hold naps.
+    Measuring bed/wake/time-in-bed across the whole window makes a nap set the
+    bed time and counts the hours awake between nap and night as "in bed"
+    (real example: a 14:38 nap turned 2026-07-19 into 20h35m in bed at 52 %
+    efficiency).
+
+    Splitting on a gap is safe because the watch emits contiguous segments
+    (including Awake) for as long as it is recording: across all real data the
+    gap between consecutive segments is either exactly 0 or more than two hours.
+    A gap of exactly `gap_seconds` still counts as one episode; anything longer
+    starts a new one.
+    """
+    episodes: list[list[Segment]] = []
+    current: list[Segment] = []
+    for seg in segments:
+        if current and (seg.start - current[-1].end).total_seconds() > gap_seconds:
+            episodes.append(current)
+            current = []
+        current.append(seg)
+    if current:
+        episodes.append(current)
+    return episodes
+
+
+def main_episode(episodes: list[list[Segment]]) -> list[Segment]:
+    """Pick the night from a set of episodes: the one with the most sleep.
+
+    Deliberately not the longest span — a restless 3 h nap must not outrank a
+    compact 5 h night. Ties break on span, then on the later start, so the
+    choice is deterministic.
+    """
+    return max(
+        episodes,
+        key=lambda ep: (
+            asleep_seconds(ep),
+            (ep[-1].end - ep[0].start).total_seconds(),
+            ep[0].start,
+        ),
+    )
+
+
 # --- Nightly summary recompute --------------------------------------------
 
 
@@ -231,12 +285,20 @@ def recompute_nights(conn: duckdb.DuckDBPyConnection, nights: set[date]) -> list
         # Raw samples may overlap (device rename, Apple revisions) — flatten to a
         # non-overlapping timeline before measuring anything. See flatten_segments.
         segments = flatten_segments(rows)
-        by_stage = stage_seconds(segments)
+        # The window can hold naps as well as the night; measure the night only.
+        episodes = split_episodes(segments)
+        night = main_episode(episodes) if episodes else []
+        by_stage = stage_seconds(night)
 
-        bed_time = min(r[0] for r in rows)
-        wake_time = max(r[1] for r in rows)
+        if night:
+            bed_time = night[0].start
+            wake_time = night[-1].end
+        else:
+            # Only zero-length samples: keep the row (efficiency guard covers it).
+            bed_time = min(r[0] for r in rows)
+            wake_time = max(r[1] for r in rows)
         time_in_bed = int((wake_time - bed_time).total_seconds())
-        asleep = asleep_seconds(segments)
+        asleep = asleep_seconds(night)
         rem = by_stage.get("AsleepREM", 0)
         deep = by_stage.get("AsleepDeep", 0)
         core = by_stage.get("AsleepCore", 0)
