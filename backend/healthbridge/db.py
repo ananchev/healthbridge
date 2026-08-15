@@ -304,6 +304,12 @@ def recompute_nights(conn: duckdb.DuckDBPyConnection, nights: set[date]) -> list
         core = by_stage.get("AsleepCore", 0)
         awake = by_stage.get("Awake", 0)
 
+        # Sleep outside the night is a nap: real sleep that belongs in the daily
+        # total, but not in the night's efficiency or stage architecture.
+        naps = [ep for ep in episodes if ep is not night]
+        nap_secs = sum(asleep_seconds(ep) for ep in naps)
+        total_asleep = asleep + nap_secs
+
         efficiency = (asleep / time_in_bed * 100) if time_in_bed and time_in_bed > 0 else None
 
         hrv_row = conn.execute(
@@ -323,8 +329,9 @@ def recompute_nights(conn: duckdb.DuckDBPyConnection, nights: set[date]) -> list
             """INSERT INTO nightly_summary (
                 night_date, bed_time, wake_time, time_in_bed_seconds,
                 asleep_seconds, rem_seconds, deep_seconds, core_seconds, awake_seconds,
-                efficiency_pct, hrv_avg_ms, rhr_bpm
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                efficiency_pct, hrv_avg_ms, rhr_bpm,
+                nap_seconds, nap_count, total_asleep_seconds
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 night_date,
                 bed_time,
@@ -338,6 +345,9 @@ def recompute_nights(conn: duckdb.DuckDBPyConnection, nights: set[date]) -> list
                 efficiency,
                 hrv_avg,
                 rhr,
+                nap_secs,
+                len(naps),
+                total_asleep,
             ],
         )
         recomputed.append(night_date)

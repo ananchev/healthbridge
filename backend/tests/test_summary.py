@@ -316,6 +316,82 @@ def test_nap_does_not_stretch_the_night(conn):
     assert eff == pytest.approx(81.25, abs=0.01)
 
 
+def test_nap_recorded_as_its_own_metric(conn):
+    """Nap sleep is excluded from the night but kept — it still counts as sleep."""
+    _seed(conn)
+    db.insert_sleep(conn, NAP_SAMPLES)
+    db.recompute_nights(conn, {NIGHT})
+
+    asleep, naps, nap_count, total = conn.execute(
+        """SELECT asleep_seconds, nap_seconds, nap_count, total_asleep_seconds
+           FROM nightly_summary WHERE night_date = ?""",
+        [NIGHT],
+    ).fetchone()
+    assert asleep == 23400
+    assert naps == 3600
+    assert nap_count == 1
+    assert total == 27000
+
+
+def test_night_without_naps_reports_zero(conn):
+    """No second episode -> nap columns are 0, and total equals the night."""
+    _seed(conn)
+    db.recompute_nights(conn, {NIGHT})
+    asleep, naps, nap_count, total = conn.execute(
+        """SELECT asleep_seconds, nap_seconds, nap_count, total_asleep_seconds
+           FROM nightly_summary WHERE night_date = ?""",
+        [NIGHT],
+    ).fetchone()
+    assert (naps, nap_count) == (0, 0)
+    assert total == asleep
+
+
+def test_nap_awake_time_is_not_counted_as_nap_sleep(conn):
+    """Only asleep time in the other episodes counts — lying awake does not."""
+    _insert_raw(
+        conn,
+        [
+            ("2026-05-20T13:00:00Z", "2026-05-20T13:30:00Z", "AsleepUnspecified", _SRC, _ING),
+            ("2026-05-20T13:30:00Z", "2026-05-20T14:00:00Z", "Awake", _SRC, _ING),
+            ("2026-05-20T23:00:00Z", "2026-05-21T04:00:00Z", "AsleepCore", _SRC, _ING),
+        ],
+    )
+    db.recompute_nights(conn, {NIGHT})
+    naps, total = conn.execute(
+        "SELECT nap_seconds, total_asleep_seconds FROM nightly_summary WHERE night_date = ?",
+        [NIGHT],
+    ).fetchone()
+    assert naps == 1800
+    assert total == 18000 + 1800
+
+
+def test_init_schema_migrates_a_pre_nap_database(conn):
+    """An existing DB predates the nap columns; init_schema must add them in place."""
+    conn.execute("DROP TABLE nightly_summary")
+    conn.execute(
+        """CREATE TABLE nightly_summary (
+               night_date DATE NOT NULL PRIMARY KEY,
+               bed_time TIMESTAMPTZ, wake_time TIMESTAMPTZ,
+               time_in_bed_seconds INTEGER, asleep_seconds INTEGER,
+               rem_seconds INTEGER, deep_seconds INTEGER, core_seconds INTEGER,
+               awake_seconds INTEGER, efficiency_pct DOUBLE, hrv_avg_ms DOUBLE,
+               rhr_bpm DOUBLE, computed_at TIMESTAMPTZ NOT NULL DEFAULT now())"""
+    )
+    db.init_schema(conn)  # must be safe to re-apply, and must add what is missing
+    cols = {r[0] for r in conn.execute("DESCRIBE nightly_summary").fetchall()}
+    assert {"nap_seconds", "nap_count", "total_asleep_seconds"} <= cols
+
+    _seed(conn)
+    db.insert_sleep(conn, NAP_SAMPLES)
+    db.recompute_nights(conn, {NIGHT})
+    assert (
+        conn.execute(
+            "SELECT nap_seconds FROM nightly_summary WHERE night_date = ?", [NIGHT]
+        ).fetchone()[0]
+        == 3600
+    )
+
+
 def test_night_is_the_episode_with_most_sleep(conn):
     """A long restless nap must not be mistaken for the night."""
     _insert_raw(
