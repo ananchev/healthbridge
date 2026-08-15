@@ -312,14 +312,23 @@ def recompute_nights(conn: duckdb.DuckDBPyConnection, nights: set[date]) -> list
 
         efficiency = (asleep / time_in_bed * 100) if time_in_bed and time_in_bed > 0 else None
 
+        # One value per timestamp: a reading re-delivered under a second source
+        # name (or revised by a later export) must not be averaged with itself.
         hrv_row = conn.execute(
-            "SELECT AVG(value_ms) FROM hrv_samples WHERE ts >= ? AND ts < ?",
+            """SELECT AVG(value_ms) FROM (
+                   SELECT DISTINCT ON (ts) value_ms FROM hrv_samples
+                   WHERE ts >= ? AND ts < ?
+                   ORDER BY ts, ingested_at DESC, source
+               ) AS latest""",
             [start_utc, end_utc],
         ).fetchone()
         hrv_avg = hrv_row[0] if hrv_row and hrv_row[0] is not None else None
 
+        # Same day can hold two values that genuinely differ (Apple revises RHR);
+        # take the most recent export rather than an arbitrary row.
         rhr_row = conn.execute(
-            "SELECT value_bpm FROM rhr_samples WHERE date = ? LIMIT 1",
+            "SELECT value_bpm FROM rhr_samples WHERE date = ? "
+            "ORDER BY ingested_at DESC, source LIMIT 1",
             [night_date],
         ).fetchone()
         rhr = rhr_row[0] if rhr_row else None

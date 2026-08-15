@@ -160,6 +160,46 @@ def test_rhr_absent(conn):
     assert rhr is None
 
 
+def test_rhr_prefers_the_latest_export(conn):
+    """Two sources hold the same day at different values — the newer one wins.
+
+    Real case: 2026-08-10 arrived as 59 bpm and was later revised to 63.
+    """
+    _seed(conn, rhr=False)
+    conn.executemany(
+        """INSERT INTO rhr_samples (date, value_bpm, source, ingested_at)
+           VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING""",
+        [
+            (NIGHT, 59.0, "Apple Watch", "2026-05-21T10:00:00Z"),
+            (NIGHT, 63.0, "AntonU2", "2026-05-21T13:00:00Z"),
+        ],
+    )
+    db.recompute_nights(conn, {NIGHT})
+    rhr = conn.execute(
+        "SELECT rhr_bpm FROM nightly_summary WHERE night_date = ?", [NIGHT]
+    ).fetchone()[0]
+    assert rhr == pytest.approx(63.0)
+
+
+def test_hrv_averages_one_value_per_timestamp(conn):
+    """A revised reading replaces the old one instead of being averaged with it."""
+    _seed(conn, hrv=False)
+    conn.executemany(
+        """INSERT INTO hrv_samples (ts, value_ms, source, ingested_at)
+           VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING""",
+        [
+            ("2026-05-20T21:00:00Z", 34.2, "Apple Watch", "2026-05-21T10:00:00Z"),
+            ("2026-05-20T21:00:00Z", 40.0, "AntonU2", "2026-05-21T13:00:00Z"),
+            ("2026-05-21T01:00:00Z", 38.6, "AntonU2", "2026-05-21T13:00:00Z"),
+        ],
+    )
+    db.recompute_nights(conn, {NIGHT})
+    hrv = conn.execute(
+        "SELECT hrv_avg_ms FROM nightly_summary WHERE night_date = ?", [NIGHT]
+    ).fetchone()[0]
+    assert hrv == pytest.approx(39.3, abs=0.01)  # (40.0 + 38.6) / 2, not a 3-way mean
+
+
 def test_recompute_idempotent(conn):
     """Calling recompute twice leaves exactly one nightly_summary row."""
     _seed(conn)
