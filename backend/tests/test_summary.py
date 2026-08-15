@@ -171,6 +171,116 @@ def test_recompute_idempotent(conn):
     assert count == 1
 
 
+def _insert_raw(conn, rows) -> None:
+    """Insert sleep rows with an explicit ingested_at (which insert_sleep sets itself).
+
+    Needed to exercise revision handling, where the winner is decided by which
+    export arrived last.
+    """
+    conn.executemany(
+        """INSERT INTO sleep_samples (start_ts, end_ts, stage, source, ingested_at)
+           VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING""",
+        rows,
+    )
+
+
+def test_duplicate_source_does_not_double_count(conn):
+    """A device rename re-delivers the whole night under a new source name.
+
+    Both copies are stored (source is part of the PK) — the summary must still
+    report one night's worth of sleep, not two.
+    """
+    _seed(conn)
+    db.insert_sleep(
+        conn,
+        [s.model_copy(update={"source": "AntonU2"}) for s in SLEEP_SAMPLES],
+    )
+    assert conn.execute("SELECT COUNT(*) FROM sleep_samples").fetchone()[0] == 10
+
+    db.recompute_nights(conn, {NIGHT})
+    tib, asleep, eff = conn.execute(
+        "SELECT time_in_bed_seconds, asleep_seconds, efficiency_pct "
+        "FROM nightly_summary WHERE night_date = ?",
+        [NIGHT],
+    ).fetchone()
+    assert tib == 28800
+    assert asleep == 23400
+    assert eff == pytest.approx(81.25, abs=0.01)
+
+
+def test_revised_night_uses_latest_export(conn):
+    """Apple re-splits a block in a later export; the newer version wins."""
+    _insert_raw(
+        conn,
+        [
+            # First export: one 40-minute REM block.
+            (
+                "2026-05-20T22:00:00Z",
+                "2026-05-20T22:40:00Z",
+                "AsleepREM",
+                _SRC,
+                "2026-05-21T10:00:00Z",
+            ),
+            # Second export: same span, re-split with 10 minutes reclassified Awake.
+            (
+                "2026-05-20T22:00:00Z",
+                "2026-05-20T22:30:00Z",
+                "AsleepREM",
+                _SRC,
+                "2026-05-21T13:00:00Z",
+            ),
+            ("2026-05-20T22:30:00Z", "2026-05-20T22:40:00Z", "Awake", _SRC, "2026-05-21T13:00:00Z"),
+        ],
+    )
+    db.recompute_nights(conn, {NIGHT})
+    asleep, rem, awake, eff = conn.execute(
+        "SELECT asleep_seconds, rem_seconds, awake_seconds, efficiency_pct "
+        "FROM nightly_summary WHERE night_date = ?",
+        [NIGHT],
+    ).fetchone()
+    assert rem == 1800
+    assert awake == 600
+    assert asleep == 1800
+    assert eff == pytest.approx(75.0, abs=0.01)
+
+
+def test_efficiency_never_exceeds_100(conn):
+    """The invariant the >100 % rows violated: asleep can never beat time in bed."""
+    _seed(conn)
+    db.insert_sleep(conn, [s.model_copy(update={"source": "AntonU2"}) for s in SLEEP_SAMPLES])
+    _insert_raw(
+        conn,
+        [
+            (
+                "2026-05-20T22:00:00Z",
+                "2026-05-20T23:05:00Z",
+                "AsleepDeep",
+                "third",
+                "2026-05-21T14:00:00Z",
+            ),
+        ],
+    )
+    db.recompute_nights(conn, {NIGHT})
+    eff = conn.execute(
+        "SELECT efficiency_pct FROM nightly_summary WHERE night_date = ?", [NIGHT]
+    ).fetchone()[0]
+    assert eff <= 100.0
+
+
+def test_stage_seconds_sum_to_time_in_bed(conn):
+    """Flattened stages tile the night exactly — no gaps, no overlap."""
+    _seed(conn)
+    db.recompute_nights(conn, {NIGHT})
+    tib, asleep, awake = conn.execute(
+        "SELECT time_in_bed_seconds, asleep_seconds, awake_seconds FROM nightly_summary "
+        "WHERE night_date = ?",
+        [NIGHT],
+    ).fetchone()
+    # InBed spans 20:00-04:00 and encloses the staged samples; the 60 min it is
+    # the only cover for (20:00-20:30, 03:30-04:00) is in-bed-but-unstaged time.
+    assert tib == asleep + awake + 3600
+
+
 def test_recompute_multiple_nights(conn):
     """Two distinct nights produce two summary rows."""
     night2 = date(2026, 5, 22)
